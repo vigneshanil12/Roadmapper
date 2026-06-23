@@ -16,36 +16,75 @@ const STATUS_LABEL: Record<CardStatus, string> = {
 export default function CardItem({
   card,
   editing,
+  colW,
   onStartEdit,
   onSave,
   onDelete,
   onCycleStatus,
+  onResize,
   overlay = false,
 }: {
   card: Card;
   editing: boolean;
+  colW: number;
   onStartEdit: (id: string) => void;
   onSave: (id: string, patch: Partial<Card>) => void;
   onDelete: (id: string) => void;
   onCycleStatus: (id: string) => void;
+  onResize: (id: string, span: number) => void;
   overlay?: boolean;
 }) {
   const cat = CATEGORY_MAP[card.category];
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: card.id, disabled: editing || overlay });
 
+  // Live span while dragging the resize handle; falls back to persisted span.
+  const [resizeSpan, setResizeSpan] = useState<number | null>(null);
+  const span = resizeSpan ?? card.span ?? 1;
+  // Card sits in a cell padded 6px each side; width = colW*span minus that pad.
+  // Tray cards use a fixed width (no half-month grid to size against).
+  const widthPx = card.tray ? 208 : colW * span - 12;
+
   const style = overlay
-    ? {}
+    ? { width: widthPx }
     : {
         transform: CSS.Transform.toString(transform),
         transition,
         opacity: isDragging ? 0.4 : 1,
+        width: widthPx,
+        zIndex: span > 1 ? 5 : undefined,
       };
 
-  const base = `rounded-lg border px-2.5 py-2 text-[12px] leading-snug shadow-sm ${cat.cardBg} ${
+  function startResize(e: React.PointerEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    const startX = e.clientX;
+    const startSpan = card.span ?? 1;
+    function move(ev: PointerEvent) {
+      const raw = startSpan + Math.round((ev.clientX - startX) / colW);
+      setResizeSpan(Math.min(2, Math.max(1, raw)));
+    }
+    function up() {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      setResizeSpan((cur) => {
+        const final = cur ?? startSpan;
+        if (final !== startSpan) onResize(card.id, final);
+        return null;
+      });
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+  // Parked cards are neutral gray; they take on the category color once dropped
+  // into a month row.
+  const fill = card.tray ? "bg-white" : cat.cardBg;
+  const borderColor = card.tray ? "border-slate-300" : cat.cardBorder;
+  const base = `relative rounded-lg border px-2.5 py-2 text-[12px] leading-snug shadow-sm ${fill} ${
     card.status === "tentative"
-      ? `border-dashed border-2 ${cat.cardBorder}`
-      : `border ${cat.cardBorder}`
+      ? `border-dashed border-2 ${borderColor}`
+      : `border ${borderColor}`
   }`;
 
   if (editing) {
@@ -113,6 +152,16 @@ export default function CardItem({
           </div>
         )}
       </div>
+      {!overlay && !card.tray && (
+        <div
+          title="Drag to resize (half ↔ full month)"
+          onPointerDown={startResize}
+          onDoubleClick={(e) => e.stopPropagation()}
+          className="absolute right-0 top-0 z-10 h-full w-2 cursor-ew-resize rounded-r-lg opacity-0 transition hover:bg-black/10 group-hover:opacity-100"
+        >
+          <div className="absolute right-0.5 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded bg-black/25" />
+        </div>
+      )}
     </div>
   );
 }

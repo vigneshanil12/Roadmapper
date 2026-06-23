@@ -19,6 +19,7 @@ export async function POST(req: NextRequest) {
           col_month: u.col_month,
           col_half: u.col_half,
           position: u.position,
+          tray: u.tray ?? false,
           updated_at: stamp,
         })
         .eq("id", u.id as string)

@@ -23,8 +23,10 @@ export async function POST(req: NextRequest) {
       col_year: body.col_year,
       col_month: body.col_month,
       col_half: body.col_half,
+      span: body.span ?? 1,
       position: body.position ?? 0,
       status: body.status ?? "normal",
+      tray: body.tray ?? false,
     })
     .select()
     .single();

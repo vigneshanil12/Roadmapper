@@ -8,8 +8,10 @@ const FIELDS = [
   "col_year",
   "col_month",
   "col_half",
+  "span",
   "position",
   "status",
+  "tray",
 ] as const;
 
 export async function PATCH(

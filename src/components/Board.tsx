@@ -15,9 +15,10 @@ import {
 import { arrayMove } from "@dnd-kit/sortable";
 import { CATEGORIES } from "@/lib/categories";
 import { buildMonths, currentMonthIndex } from "@/lib/time";
-import { cellKey, type Card, type CardStatus, type CategoryId } from "@/lib/types";
+import { cellKey, TRAY_ID, type Card, type CardStatus, type CategoryId } from "@/lib/types";
 import Cell from "./Cell";
 import CardItem from "./CardItem";
+import Tray from "./Tray";
 
 const LABEL_W = 168;
 const COL_W = 224;
@@ -54,6 +55,7 @@ export default function Board() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [trayOpen, setTrayOpen] = useState(true);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const itemsRef = useRef(items);
@@ -69,11 +71,13 @@ export default function Board() {
       .then(({ cards }: { cards: Card[] }) => {
         if (!alive) return;
         const byId: Record<string, Card> = {};
-        const map: Record<string, string[]> = {};
+        const map: Record<string, string[]> = { [TRAY_ID]: [] };
         for (const k of allCellIds) map[k] = [];
         for (const c of cards) {
           byId[c.id] = c;
-          const k = cellKey(c.category, c.col_year, c.col_month, c.col_half);
+          const k = c.tray
+            ? TRAY_ID
+            : cellKey(c.category, c.col_year, c.col_month, c.col_half);
           (map[k] ||= []).push(c.id);
         }
         for (const k in map)
@@ -100,6 +104,26 @@ export default function Board() {
     const updates: Array<Record<string, unknown>> = [];
     const next = { ...cardsRef.current };
     for (const key of Object.keys(items)) {
+      // Tray: keep category/col as-is, only flag tray + stack order.
+      if (key === TRAY_ID) {
+        items[key].forEach((id, idx) => {
+          const card = next[id];
+          if (!card) return;
+          if (!card.tray || card.position !== idx) {
+            next[id] = { ...card, tray: true, position: idx };
+            updates.push({
+              id,
+              category: card.category,
+              col_year: card.col_year,
+              col_month: card.col_month,
+              col_half: card.col_half,
+              position: idx,
+              tray: true,
+            });
+          }
+        });
+        continue;
+      }
       const { category, year, month, half } = parseCell(key);
       items[key].forEach((id, idx) => {
         const card = next[id];
@@ -109,7 +133,8 @@ export default function Board() {
           card.col_year !== year ||
           card.col_month !== month ||
           card.col_half !== half ||
-          card.position !== idx
+          card.position !== idx ||
+          card.tray
         ) {
           next[id] = {
             ...card,
@@ -118,6 +143,7 @@ export default function Board() {
             col_month: month,
             col_half: half,
             position: idx,
+            tray: false,
           };
           updates.push({
             id,
@@ -126,6 +152,7 @@ export default function Board() {
             col_month: month,
             col_half: half,
             position: idx,
+            tray: false,
           });
         }
       });
@@ -203,23 +230,37 @@ export default function Board() {
 
   // ---- card CRUD ----
   async function addCard(cellId: string) {
-    const { category, year, month, half } = parseCell(cellId);
-    const position = (itemsRef.current[cellId]?.length ?? 0);
+    const isTray = cellId === TRAY_ID;
+    // Tray cards have no real column yet; default to the current half-month so
+    // the stored col_* are valid until the card is dropped into a cell.
+    const now = new Date();
+    const loc = isTray
+      ? {
+          category: "features" as CategoryId,
+          col_year: now.getFullYear(),
+          col_month: now.getMonth() + 1,
+          col_half: now.getDate() <= 15 ? 0 : 1,
+        }
+      : (() => {
+          const { category, year, month, half } = parseCell(cellId);
+          return { category, col_year: year, col_month: month, col_half: half };
+        })();
+    const position = itemsRef.current[cellId]?.length ?? 0;
     const res = await fetch("/api/cards", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         title: "",
         body: "",
-        category,
-        col_year: year,
-        col_month: month,
-        col_half: half,
+        ...loc,
+        span: 1,
         position,
         status: "normal",
+        tray: isTray,
       }),
     });
     const { card } = (await res.json()) as { card: Card };
+    if (isTray) setTrayOpen(true);
     setCardsById((p) => ({ ...p, [card.id]: card }));
     setItems((p) => ({ ...p, [cellId]: [...(p[cellId] ?? []), card.id] }));
     setEditingId(card.id);
@@ -248,6 +289,10 @@ export default function Board() {
       return n;
     });
     fetch(`/api/cards/${id}`, { method: "DELETE" });
+  }
+
+  function resizeCard(id: string, span: number) {
+    saveCard(id, { span });
   }
 
   function cycleStatus(id: string) {
@@ -280,18 +325,31 @@ export default function Board() {
         </div>
       </header>
 
-      <div ref={scrollRef} className="flex-1 overflow-auto">
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCorners}
-          onDragStart={handleDragStart}
-          onDragOver={handleDragOver}
-          onDragEnd={handleDragEnd}
-        >
-          <div
-            className="grid w-max"
-            style={{ gridTemplateColumns: gridCols }}
-          >
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCorners}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragEnd={handleDragEnd}
+      >
+        <div className="flex flex-1 flex-col overflow-hidden">
+          <Tray
+            cardIds={items[TRAY_ID] ?? []}
+            cardsById={cardsById}
+            open={trayOpen}
+            onToggle={() => setTrayOpen((o) => !o)}
+            editingId={editingId}
+            onAdd={addCard}
+            onStartEdit={setEditingId}
+            onSave={saveCard}
+            onDelete={deleteCard}
+            onCycleStatus={cycleStatus}
+          />
+          <div ref={scrollRef} className="flex-1 overflow-auto">
+            <div
+              className="grid w-max"
+              style={{ gridTemplateColumns: gridCols }}
+            >
             {/* Row 1: month headers */}
             <div className="sticky left-0 top-0 z-30 border-b border-r border-slate-200 bg-white" />
             {months.map((m) => (
@@ -325,6 +383,7 @@ export default function Board() {
                 labelText={cat.labelText}
                 cardBg={cat.cardBg}
                 cols={cols}
+                colW={COL_W}
                 items={items}
                 cardsById={cardsById}
                 editingId={editingId}
@@ -333,25 +392,29 @@ export default function Board() {
                 onSave={saveCard}
                 onDelete={deleteCard}
                 onCycleStatus={cycleStatus}
+                onResize={resizeCard}
               />
             ))}
+            </div>
           </div>
+        </div>
 
-          <DragOverlay>
-            {activeCard ? (
-              <CardItem
-                card={activeCard}
-                editing={false}
-                overlay
-                onStartEdit={() => {}}
-                onSave={() => {}}
-                onDelete={() => {}}
-                onCycleStatus={() => {}}
-              />
-            ) : null}
-          </DragOverlay>
-        </DndContext>
-      </div>
+        <DragOverlay>
+          {activeCard ? (
+            <CardItem
+              card={activeCard}
+              editing={false}
+              colW={COL_W}
+              overlay
+              onStartEdit={() => {}}
+              onSave={() => {}}
+              onDelete={() => {}}
+              onCycleStatus={() => {}}
+              onResize={() => {}}
+            />
+          ) : null}
+        </DragOverlay>
+      </DndContext>
     </div>
   );
 }
@@ -363,6 +426,7 @@ function RowFragment({
   labelText,
   cardBg,
   cols,
+  colW,
   items,
   cardsById,
   editingId,
@@ -371,6 +435,7 @@ function RowFragment({
   onSave,
   onDelete,
   onCycleStatus,
+  onResize,
 }: {
   catId: CategoryId;
   label: string;
@@ -378,6 +443,7 @@ function RowFragment({
   labelText: string;
   cardBg: string;
   cols: ReturnType<typeof buildMonths>[number]["cols"];
+  colW: number;
   items: Record<string, string[]>;
   cardsById: Record<string, Card>;
   editingId: string | null;
@@ -386,6 +452,7 @@ function RowFragment({
   onSave: (id: string, patch: Partial<Card>) => void;
   onDelete: (id: string) => void;
   onCycleStatus: (id: string) => void;
+  onResize: (id: string, span: number) => void;
 }) {
   return (
     <>
@@ -403,12 +470,14 @@ function RowFragment({
             cardIds={items[id] ?? []}
             cardsById={cardsById}
             rowBg={rowBg}
+            colW={colW}
             editingId={editingId}
             onAdd={onAdd}
             onStartEdit={onStartEdit}
             onSave={onSave}
             onDelete={onDelete}
             onCycleStatus={onCycleStatus}
+            onResize={onResize}
           />
         );
       })}

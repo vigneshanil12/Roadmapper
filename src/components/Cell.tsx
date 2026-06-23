@@ -10,23 +10,27 @@ export default function Cell({
   cardIds,
   cardsById,
   rowBg,
+  colW,
   editingId,
   onAdd,
   onStartEdit,
   onSave,
   onDelete,
   onCycleStatus,
+  onResize,
 }: {
   cellId: string;
   cardIds: string[];
   cardsById: Record<string, Card>;
   rowBg: string;
+  colW: number;
   editingId: string | null;
   onAdd: (cellId: string) => void;
   onStartEdit: (id: string) => void;
   onSave: (id: string, patch: Partial<Card>) => void;
   onDelete: (id: string) => void;
   onCycleStatus: (id: string) => void;
+  onResize: (id: string, span: number) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: cellId });
 
@@ -49,10 +53,12 @@ export default function Cell({
               key={id}
               card={card}
               editing={editingId === id}
+              colW={colW}
               onStartEdit={onStartEdit}
               onSave={onSave}
               onDelete={onDelete}
               onCycleStatus={onCycleStatus}
+              onResize={onResize}
             />
           );
         })}

@@ -1,6 +1,8 @@
 // Half-month column model.
-// Window: 6 months in the past (scroll back to reach) + 9 months forward,
-// each split into two halves => columns.
+// Window: fixed history floor of Jun 2026 (oldest month ever shown) up to
+// 11 months ahead of the current month. As months pass, history from Jun 2026
+// is kept and one extra forward month is revealed each month.
+// Each month split into two halves => columns.
 
 export interface Col {
   key: string; // year-month-half
@@ -17,8 +19,16 @@ export interface MonthGroup {
   cols: Col[]; // length 2
 }
 
-const PAST_MONTHS = 6;
-const FUTURE_MONTHS = 9;
+// Oldest month ever shown (history floor). 0-based month: 5 = June.
+const HISTORY_START_YEAR = 2026;
+const HISTORY_START_MONTH = 5;
+// Months shown ahead of the current month.
+const FUTURE_MONTHS = 11;
+
+// Whole-month difference: b - a, both as (year, 0-based month).
+function monthDiff(aYear: number, aMonth: number, bYear: number, bMonth: number): number {
+  return (bYear - aYear) * 12 + (bMonth - aMonth);
+}
 
 const MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -27,9 +37,14 @@ const MONTH_NAMES = [
 
 export function buildMonths(now = new Date()): MonthGroup[] {
   const groups: MonthGroup[] = [];
-  const startYear = now.getFullYear();
-  const startMonth = now.getMonth(); // 0-based
-  for (let i = -PAST_MONTHS; i < FUTURE_MONTHS; i++) {
+  // Start at the history floor; never show months before it.
+  const startYear = HISTORY_START_YEAR;
+  const startMonth = HISTORY_START_MONTH; // 0-based
+  // End at current month + FUTURE_MONTHS ahead. Total = floor..(current+11).
+  const forwardEdge = monthDiff(
+    startYear, startMonth, now.getFullYear(), now.getMonth()
+  ) + FUTURE_MONTHS;
+  for (let i = 0; i <= forwardEdge; i++) {
     const d = new Date(startYear, startMonth + i, 1);
     const year = d.getFullYear();
     const month = d.getMonth() + 1;
@@ -50,7 +65,9 @@ export function buildMonths(now = new Date()): MonthGroup[] {
 }
 
 // Index (in the flat month list) of the current month — where the board
-// should be scrolled to on load.
-export function currentMonthIndex(): number {
-  return PAST_MONTHS;
+// should be scrolled to on load. Equals months elapsed since the history floor.
+export function currentMonthIndex(now = new Date()): number {
+  return monthDiff(
+    HISTORY_START_YEAR, HISTORY_START_MONTH, now.getFullYear(), now.getMonth()
+  );
 }
