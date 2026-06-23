@@ -542,6 +542,15 @@ export default function Board() {
 
   function resizeCard(id: string, span: number) {
     saveCard(id, { span });
+    // A wide card overflows the next column; keep it at the top of its cell so
+    // smaller cards stack below it instead of leaving dead space above.
+    if (span === 2) {
+      setItems((prev) => {
+        const key = Object.keys(prev).find((k) => prev[k].includes(id));
+        if (!key || prev[key][0] === id) return prev;
+        return { ...prev, [key]: [id, ...prev[key].filter((x) => x !== id)] };
+      });
+    }
   }
 
   function cycleStatus(id: string) {
