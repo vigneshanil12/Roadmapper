@@ -21,6 +21,7 @@ export default function Tray({
   onAdd,
   onStartEdit,
   onSave,
+  onCancel,
   onDelete,
   onCycleStatus,
 }: {
@@ -34,6 +35,7 @@ export default function Tray({
   onAdd: (cellId: string) => void;
   onStartEdit: (id: string) => void;
   onSave: (id: string, patch: Partial<Card>) => void;
+  onCancel: (id: string) => void;
   onDelete: (id: string) => void;
   onCycleStatus: (id: string) => void;
 }) {
@@ -86,6 +88,7 @@ export default function Tray({
                     colW={0}
                     onStartEdit={onStartEdit}
                     onSave={onSave}
+                    onCancel={onCancel}
                     onDelete={onDelete}
                     onCycleStatus={onCycleStatus}
                     onResize={() => {}}

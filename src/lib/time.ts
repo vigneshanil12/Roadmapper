@@ -9,7 +9,7 @@ export interface Col {
   year: number;
   month: number; // 1-12
   half: number; // 0 | 1
-  label: string; // "1-15" or "16+"
+  label: string; // "Cycle 1" or "Cycle 2"
 }
 
 export interface MonthGroup {
@@ -57,7 +57,7 @@ export function buildMonths(now = new Date()): MonthGroup[] {
         year,
         month,
         half,
-        label: half === 0 ? "1–15" : "16+",
+        label: half === 0 ? "Cycle 1" : "Cycle 2",
       })),
     });
   }
