@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
       col_month: body.col_month,
       col_half: body.col_half,
       span: body.span ?? 1,
+      value: body.value ?? 0,
       position: body.position ?? 0,
       status: body.status ?? "normal",
       tray: body.tray ?? false,

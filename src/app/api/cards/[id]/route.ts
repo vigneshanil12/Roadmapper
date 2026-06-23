@@ -9,6 +9,7 @@ const FIELDS = [
   "col_month",
   "col_half",
   "span",
+  "value",
   "position",
   "status",
   "tray",

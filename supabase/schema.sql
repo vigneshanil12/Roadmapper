@@ -9,6 +9,7 @@ create table if not exists public.cards (
   col_month int not null,                  -- 1-12
   col_half int not null,                   -- 0 = first half, 1 = second half
   span int not null default 1,             -- column width: 1 = half month, 2 = full month
+  value int not null default 0,            -- value added, 0-3 (0 = none)
   position int not null default 0,         -- stack order within a cell
   status text not null default 'normal',   -- normal | done | tentative
   tray boolean not null default false,     -- true = parked in staging tray
@@ -18,6 +19,9 @@ create table if not exists public.cards (
 
 -- Backfill for tables created before `span` existed.
 alter table public.cards add column if not exists span int not null default 1;
+
+-- Backfill for tables created before `value` existed.
+alter table public.cards add column if not exists value int not null default 0;
 
 -- Staging tray flag. When true, the card lives in the parking lot above the
 -- grid and col_year/col_month/col_half are ignored until it is dropped into a cell.

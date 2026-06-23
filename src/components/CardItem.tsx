@@ -4,7 +4,18 @@ import { useEffect, useRef, useState } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { Card, CardStatus } from "@/lib/types";
-import { CATEGORY_MAP } from "@/lib/categories";
+import { CATEGORY_MAP, type Category } from "@/lib/categories";
+
+// Value badge cycles through 0 → 1 → 2 → 3 → 0.
+export const VALUE_CYCLE = [0, 1, 2, 3];
+
+// Neutral (slate) shades for parked tray cards, which have no category color.
+const TRAY_VALUE_FILL = [
+  "bg-slate-300 text-slate-800",
+  "bg-slate-500 text-white",
+  "bg-slate-700 text-white",
+] as const;
+const TRAY_VALUE_OUTLINE = "border border-slate-400 text-slate-500";
 
 const STATUS_CYCLE: CardStatus[] = ["normal", "tentative", "done"];
 const STATUS_LABEL: Record<CardStatus, string> = {
@@ -24,6 +35,7 @@ export default function CardItem({
   onDraft,
   onDelete,
   onCycleStatus,
+  onCycleValue,
   onResize,
   overlay = false,
 }: {
@@ -37,6 +49,7 @@ export default function CardItem({
   onDraft?: (id: string, patch: { title: string; body: string }) => void;
   onDelete: (id: string) => void;
   onCycleStatus: (id: string) => void;
+  onCycleValue: (id: string) => void;
   onResize: (id: string, span: number) => void;
   overlay?: boolean;
 }) {
@@ -93,9 +106,14 @@ export default function CardItem({
       : `border ${borderColor}`
   }`;
 
+  // Wide (span>1) cards overflow into the next column; the neighbor cell reads
+  // this flag to reserve top space and avoid overlap. Live span so it reacts
+  // mid-resize, before the new span persists.
+  const wide = !overlay && !card.tray && span > 1 ? "1" : undefined;
+
   if (editing) {
     return (
-      <div ref={setNodeRef} style={style} className={base}>
+      <div ref={setNodeRef} data-wide={wide} style={style} className={base}>
         <CardEditor
           card={card}
           draft={draft}
@@ -121,6 +139,7 @@ export default function CardItem({
   return (
     <div
       ref={setNodeRef}
+      data-wide={wide}
       style={style}
       {...attributes}
       {...listeners}
@@ -158,19 +177,29 @@ export default function CardItem({
             <span className="italic text-slate-500">Empty — double-click</span>
           )}
         </div>
-        {!overlay && (
-          <div className="flex shrink-0 flex-col gap-0.5 opacity-0 transition group-hover:opacity-100">
-            <IconBtn
-              title={`Status: ${STATUS_LABEL[card.status]} (click to cycle)`}
-              onClick={() => onCycleStatus(card.id)}
-            >
-              {card.status === "done" ? "✓" : card.status === "tentative" ? "▢" : "○"}
-            </IconBtn>
-            <IconBtn title="Delete" onClick={() => onDelete(card.id)}>
-              ✕
-            </IconBtn>
-          </div>
-        )}
+        <div className="flex shrink-0 flex-col items-end gap-0.5">
+          {/* Value badge — always visible, click to cycle 0→1→2→3. */}
+          <ValueBadge
+            value={card.value ?? 0}
+            cat={cat}
+            tray={card.tray}
+            overlay={overlay}
+            onClick={() => onCycleValue(card.id)}
+          />
+          {!overlay && (
+            <div className="flex flex-col items-end gap-0.5 opacity-0 transition group-hover:opacity-100">
+              <IconBtn
+                title={`Status: ${STATUS_LABEL[card.status]} (click to cycle)`}
+                onClick={() => onCycleStatus(card.id)}
+              >
+                {card.status === "done" ? "✓" : card.status === "tentative" ? "▢" : "○"}
+              </IconBtn>
+              <IconBtn title="Delete" onClick={() => onDelete(card.id)}>
+                ✕
+              </IconBtn>
+            </div>
+          )}
+        </div>
       </div>
       {!overlay && !card.tray && (
         <div
@@ -183,6 +212,46 @@ export default function CardItem({
         </div>
       )}
     </div>
+  );
+}
+
+// Round badge showing a card's value (0-3). 0 = outline only; 1-3 fill with the
+// row's category color, lightest → darkest. Click cycles the value.
+function ValueBadge({
+  value,
+  cat,
+  tray,
+  overlay,
+  onClick,
+}: {
+  value: number;
+  cat: Category;
+  tray: boolean;
+  overlay: boolean;
+  onClick: () => void;
+}) {
+  const v = Math.min(3, Math.max(0, value));
+  const fills = tray ? TRAY_VALUE_FILL : cat.valueFill;
+  const outline = tray ? TRAY_VALUE_OUTLINE : cat.valueOutline;
+  const tone = v === 0 ? outline : fills[v - 1];
+  const cls = `flex h-[18px] w-[18px] items-center justify-center rounded-full text-[10px] font-bold leading-none ${tone}`;
+
+  if (overlay) {
+    return <span className={cls}>{v}</span>;
+  }
+  return (
+    <button
+      title={`Value: ${v}/3 (click to cycle)`}
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={`${cls} transition hover:brightness-95`}
+    >
+      {v}
+    </button>
   );
 }
 
