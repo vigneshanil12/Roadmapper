@@ -289,7 +289,6 @@ function CardEditor({
     <div
       ref={rootRef}
       onPointerDown={(e) => e.stopPropagation()}
-      className="space-y-1"
     >
       {/* Title — borderless, rendered exactly like the card title. */}
       <textarea
@@ -337,11 +336,11 @@ function CardEditor({
           if (e.key === "Escape") onCancel(card.id);
         }}
         placeholder="• One bullet per line"
-        className={`w-full resize-none overflow-hidden bg-transparent text-[12px] leading-snug outline-none placeholder:italic placeholder:text-slate-400 ${
+        className={`mt-0.5 w-full resize-none overflow-hidden bg-transparent text-[12px] leading-snug outline-none placeholder:italic placeholder:text-slate-400 ${
           done ? "line-through" : ""
         }`}
       />
-      <div className="flex justify-end gap-1">
+      <div className="mt-1 flex justify-end gap-1">
         <button
           onClick={() => onCancel(card.id)}
           className="rounded px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-black/10"
