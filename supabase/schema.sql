@@ -1,0 +1,22 @@
+-- Roadmap schema. Run in Supabase SQL editor.
+
+create table if not exists public.cards (
+  id uuid primary key default gen_random_uuid(),
+  title text not null default '',
+  body text not null default '',           -- bullet lines, one per newline
+  category text not null,                  -- growth | partner | features | bugs
+  col_year int not null,
+  col_month int not null,                  -- 1-12
+  col_half int not null,                   -- 0 = first half, 1 = second half
+  position int not null default 0,         -- stack order within a cell
+  status text not null default 'normal',   -- normal | done | tentative
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists cards_cell_idx
+  on public.cards (category, col_year, col_month, col_half, position);
+
+-- Lock down direct access. App talks to DB only via server (service role),
+-- which bypasses RLS. Enabling RLS with no policies blocks anon/auth keys.
+alter table public.cards enable row level security;
