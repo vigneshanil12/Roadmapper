@@ -51,7 +51,7 @@ export function buildMonths(now = new Date()): MonthGroup[] {
     groups.push({
       year,
       month,
-      label: `${MONTH_NAMES[month - 1]} ${year}`,
+      label: `${MONTH_NAMES[month - 1].toUpperCase()} ${String(year).slice(-2)}`,
       cols: [0, 1].map((half) => ({
         key: `${year}-${month}-${half}`,
         year,

@@ -24,6 +24,7 @@ export default function Tray({
   onDraft,
   onDelete,
   onCycleStatus,
+  onCycleValue,
 }: {
   cardIds: string[];
   cardsById: Record<string, Card>;
@@ -38,6 +39,7 @@ export default function Tray({
   onDraft: (id: string, patch: { title: string; body: string }) => void;
   onDelete: (id: string) => void;
   onCycleStatus: (id: string) => void;
+  onCycleValue: (id: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: TRAY_ID });
 
@@ -88,6 +90,7 @@ export default function Tray({
                     onDraft={onDraft}
                     onDelete={onDelete}
                     onCycleStatus={onCycleStatus}
+                    onCycleValue={onCycleValue}
                     onResize={() => {}}
                   />
                 </div>

@@ -64,6 +64,13 @@ export default function Board() {
   const [trayHover, setTrayHover] = useState(false);
   // Unsaved edits, stashed when the user clicks away mid-edit (see onDraft).
   const [drafts, setDrafts] = useState<Record<string, { title: string; body: string }>>({});
+  // Bottom-edge px of the widest overflowing card per cell. A cell with a wide
+  // (span=2) card overflows into the column to its right; that right cell reads
+  // this to reserve top space and realign its own cards clear of the overlap.
+  const [overflow, setOverflow] = useState<Record<string, number>>({});
+  const handleOverflow = useCallback((cellId: string, bottomPx: number) => {
+    setOverflow((p) => (p[cellId] === bottomPx ? p : { ...p, [cellId]: bottomPx }));
+  }, []);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const itemsRef = useRef(items);
@@ -264,6 +271,7 @@ export default function Board() {
       col_month: c.col_month,
       col_half: c.col_half,
       span: c.span,
+      value: c.value,
       position: c.position,
       status: c.status,
       tray: c.tray,
@@ -451,6 +459,7 @@ export default function Board() {
       body: "",
       ...loc,
       span: 1,
+      value: 0,
       position,
       status: "normal",
       tray: isTray,
@@ -542,6 +551,13 @@ export default function Board() {
     saveCard(id, { status: next });
   }
 
+  function cycleValue(id: string) {
+    const cur = cardsRef.current[id];
+    if (!cur) return;
+    const next = ((cur.value ?? 0) + 1) % 4;
+    saveCard(id, { value: next });
+  }
+
   async function logout() {
     await fetch("/api/logout", { method: "POST" });
     window.location.href = "/login";
@@ -588,6 +604,7 @@ export default function Board() {
             onDraft={draftEdit}
             onDelete={deleteCard}
             onCycleStatus={cycleStatus}
+            onCycleValue={cycleValue}
           />
           <div ref={scrollRef} className="flex-1 overflow-auto">
             <div
@@ -634,6 +651,8 @@ export default function Board() {
                 colW={COL_W}
                 items={items}
                 cardsById={cardsById}
+                overflow={overflow}
+                onOverflow={handleOverflow}
                 editingId={editingId}
                 drafts={drafts}
                 onAdd={addCard}
@@ -643,6 +662,7 @@ export default function Board() {
                 onDraft={draftEdit}
                 onDelete={deleteCard}
                 onCycleStatus={cycleStatus}
+                onCycleValue={cycleValue}
                 onResize={resizeCard}
               />
             ))}
@@ -662,6 +682,7 @@ export default function Board() {
               onCancel={() => {}}
               onDelete={() => {}}
               onCycleStatus={() => {}}
+              onCycleValue={() => {}}
               onResize={() => {}}
             />
           ) : null}
@@ -681,6 +702,8 @@ function RowFragment({
   colW,
   items,
   cardsById,
+  overflow,
+  onOverflow,
   editingId,
   drafts,
   onAdd,
@@ -690,6 +713,7 @@ function RowFragment({
   onDraft,
   onDelete,
   onCycleStatus,
+  onCycleValue,
   onResize,
 }: {
   catId: CategoryId;
@@ -701,6 +725,8 @@ function RowFragment({
   colW: number;
   items: Record<string, string[]>;
   cardsById: Record<string, Card>;
+  overflow: Record<string, number>;
+  onOverflow: (cellId: string, bottomPx: number) => void;
   editingId: string | null;
   drafts: Record<string, { title: string; body: string }>;
   onAdd: (cellId: string) => void;
@@ -710,6 +736,7 @@ function RowFragment({
   onDraft: (id: string, patch: { title: string; body: string }) => void;
   onDelete: (id: string) => void;
   onCycleStatus: (id: string) => void;
+  onCycleValue: (id: string) => void;
   onResize: (id: string, span: number) => void;
 }) {
   return (
@@ -724,6 +751,24 @@ function RowFragment({
         const edgeClass = `${c.half === 0 ? "border-l-2 border-l-slate-400" : ""} ${
           i === cols.length - 1 ? "border-r-2 border-r-slate-400" : ""
         }`;
+        // Reserve top space if the cell to our left has a wide card overflowing in.
+        const leftCol = cols[i - 1];
+        const leftId = leftCol
+          ? cellKey(catId, leftCol.year, leftCol.month, leftCol.half)
+          : null;
+        const reserveTop = leftId && overflow[leftId] ? overflow[leftId] + 6 : 0;
+        // The second-half cell shows the whole month's value total for this row:
+        // sum of card values across both half-columns of the month.
+        let monthTotal: number | null = null;
+        if (c.half === 1) {
+          const sumCell = (cid: string) =>
+            (items[cid] ?? []).reduce(
+              (n, cardId) => n + (cardsById[cardId]?.value ?? 0),
+              0
+            );
+          const firstHalf = cellKey(catId, c.year, c.month, 0);
+          monthTotal = sumCell(firstHalf) + sumCell(id);
+        }
         return (
           <Cell
             key={id}
@@ -733,6 +778,10 @@ function RowFragment({
             rowBg={rowBg}
             colW={colW}
             edgeClass={edgeClass}
+            reserveTop={reserveTop}
+            monthTotal={monthTotal}
+            totalColor={labelText}
+            onOverflow={onOverflow}
             editingId={editingId}
             drafts={drafts}
             onAdd={onAdd}
@@ -742,6 +791,7 @@ function RowFragment({
             onDraft={onDraft}
             onDelete={onDelete}
             onCycleStatus={onCycleStatus}
+            onCycleValue={onCycleValue}
             onResize={onResize}
           />
         );
