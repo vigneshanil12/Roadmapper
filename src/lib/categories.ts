@@ -7,7 +7,9 @@ export interface Category {
   rowBg: string; // category label cell + faint row tint
   labelText: string;
   cardBg: string;
+  cardBgFaint: string; // 50% opacity fill for dashed/tentative cards
   cardBorder: string;
+  cardBorderHex: string; // border hex (matches cardBorder) for custom dashed stroke
   // Value badge fills for value 1/2/3 (lightest → darkest), each "bg + text".
   valueFill: [string, string, string];
   // Value badge for 0: outline only, no fill.
@@ -24,7 +26,9 @@ export const CATEGORIES: Category[] = [
     rowBg: "bg-green-100/40",
     labelText: "text-green-800",
     cardBg: "bg-green-200",
+    cardBgFaint: "bg-green-200/50",
     cardBorder: "border-green-400",
+    cardBorderHex: "#4ade80",
     valueFill: [
       "bg-green-300 text-green-900",
       "bg-green-500 text-white",
@@ -40,7 +44,9 @@ export const CATEGORIES: Category[] = [
     rowBg: "bg-amber-100/40",
     labelText: "text-amber-800",
     cardBg: "bg-amber-200",
+    cardBgFaint: "bg-amber-200/50",
     cardBorder: "border-amber-400",
+    cardBorderHex: "#fbbf24",
     valueFill: [
       "bg-amber-300 text-amber-900",
       "bg-amber-500 text-white",
@@ -56,7 +62,9 @@ export const CATEGORIES: Category[] = [
     rowBg: "bg-violet-100/40",
     labelText: "text-violet-800",
     cardBg: "bg-violet-200",
+    cardBgFaint: "bg-violet-200/50",
     cardBorder: "border-violet-400",
+    cardBorderHex: "#a78bfa",
     valueFill: [
       "bg-violet-300 text-violet-900",
       "bg-violet-500 text-white",
@@ -72,7 +80,9 @@ export const CATEGORIES: Category[] = [
     rowBg: "bg-red-100/40",
     labelText: "text-red-800",
     cardBg: "bg-red-200",
+    cardBgFaint: "bg-red-200/50",
     cardBorder: "border-red-400",
+    cardBorderHex: "#f87171",
     valueFill: [
       "bg-red-300 text-red-900",
       "bg-red-500 text-white",
