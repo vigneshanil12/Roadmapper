@@ -28,7 +28,7 @@ const TRAY_VALUE_FILL = [
 ] as const;
 const TRAY_VALUE_OUTLINE = "border border-slate-400 text-slate-500";
 
-const STATUS_CYCLE: CardStatus[] = ["normal", "tentative", "done"];
+const STATUS_CYCLE: CardStatus[] = ["normal", "done", "tentative"];
 const STATUS_LABEL: Record<CardStatus, string> = {
   normal: "•",
   tentative: "dashed",
@@ -107,15 +107,40 @@ export default function CardItem({
     window.addEventListener("pointerup", up);
   }
 
+  const isDone = card.status === "done";
+  const isTentative = card.status === "tentative";
+
   // Parked cards are neutral gray; they take on the category color once dropped
-  // into a month row.
-  const fill = card.tray ? "bg-white" : cat.cardBg;
-  const borderColor = card.tray ? "border-slate-300" : cat.cardBorder;
-  const base = `relative rounded-lg border px-2.5 py-2 text-[12px] leading-snug shadow-sm ${fill} ${
-    card.status === "tentative"
-      ? `border-dashed border-2 ${borderColor}`
-      : `border ${borderColor}`
-  }`;
+  // into a month row. Done cards go white with dark category text; tentative
+  // cards use a 50%-opacity fill behind a custom-density dashed border.
+  const fill = card.tray
+    ? "bg-white"
+    : isDone
+    ? "bg-white"
+    : isTentative
+    ? cat.cardBgFaint
+    : cat.cardBg;
+  // Done cards recolor all text/strikethrough/tick to the row-header dark hex
+  // (e.g. amber-800 / #92400e); currentColor carries it to line-through + tick.
+  const doneText = isDone ? (card.tray ? "text-slate-800" : cat.labelText) : "";
+  // Tentative borders are drawn via background gradients (below), so the box
+  // itself carries no border; everything else gets a solid colored border.
+  const borderClass = isTentative
+    ? "border-0"
+    : `border ${card.tray ? "border-slate-300" : cat.cardBorder}`;
+  const base = `relative rounded-lg px-2.5 py-2 text-[12px] leading-snug shadow-sm ${fill} ${borderClass} ${doneText}`;
+
+  // Custom dashed border for tentative cards: 4 repeating-linear-gradients (one
+  // per edge) give a 2px stroke with longer dashes/gaps than the CSS default.
+  const dashHex = card.tray ? "#94a3b8" : cat.cardBorderHex;
+  const dashStyle: React.CSSProperties = isTentative
+    ? {
+        backgroundImage: `repeating-linear-gradient(to right, ${dashHex} 0 8px, transparent 8px 14px), repeating-linear-gradient(to right, ${dashHex} 0 8px, transparent 8px 14px), repeating-linear-gradient(to bottom, ${dashHex} 0 8px, transparent 8px 14px), repeating-linear-gradient(to bottom, ${dashHex} 0 8px, transparent 8px 14px)`,
+        backgroundSize: "100% 2px, 100% 2px, 2px 100%, 2px 100%",
+        backgroundPosition: "0 0, 0 100%, 0 0, 100% 0",
+        backgroundRepeat: "no-repeat",
+      }
+    : {};
 
   // Wide (span>1) cards overflow into the next column; the neighbor cell reads
   // this flag to reserve top space and avoid overlap. Live span so it reacts
@@ -124,7 +149,7 @@ export default function CardItem({
 
   if (editing) {
     return (
-      <div ref={setNodeRef} data-wide={wide} style={style} className={base}>
+      <div ref={setNodeRef} data-wide={wide} style={{ ...style, ...dashStyle }} className={base}>
         <CardEditor
           card={card}
           draft={draft}
@@ -151,13 +176,11 @@ export default function CardItem({
     <div
       ref={setNodeRef}
       data-wide={wide}
-      style={style}
+      style={{ ...style, ...dashStyle }}
       {...attributes}
       {...listeners}
       onDoubleClick={() => onStartEdit(card.id)}
-      className={`${base} group cursor-grab active:cursor-grabbing ${
-        done ? "opacity-70" : ""
-      }`}
+      className={`${base} group cursor-grab active:cursor-grabbing`}
     >
       {draft && (
         <span
@@ -166,7 +189,13 @@ export default function CardItem({
         />
       )}
       <div className="flex items-start justify-between gap-1">
-        <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 flex-1 items-start gap-1">
+          {done && (
+            <span title="Completed" className="shrink-0 font-semibold leading-snug">
+              ✓
+            </span>
+          )}
+          <div className="min-w-0 flex-1">
           {shownTitle && (
             <div
               className={`font-semibold ${done ? "line-through" : ""}`}
@@ -187,6 +216,7 @@ export default function CardItem({
           {!shownTitle && bullets.length === 0 && (
             <span className="italic text-slate-500">Empty — double-click</span>
           )}
+          </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-0.5">
           {/* Value badge — always visible, click to cycle 0→1→2→3. */}

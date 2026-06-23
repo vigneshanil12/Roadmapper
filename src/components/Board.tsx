@@ -25,7 +25,7 @@ import Tray from "./Tray";
 
 const LABEL_W = 168;
 const COL_W = 224;
-const STATUS_CYCLE: CardStatus[] = ["normal", "tentative", "done"];
+const STATUS_CYCLE: CardStatus[] = ["normal", "done", "tentative"];
 
 function parseCell(id: string): {
   category: CategoryId;
