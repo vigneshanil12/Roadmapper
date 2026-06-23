@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
   MeasuringStrategy,
   PointerSensor,
   closestCorners,
+  pointerWithin,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
@@ -57,6 +59,9 @@ export default function Board() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [trayOpen, setTrayOpen] = useState(false);
+  // True while a dragged card hovers the parking lot. Expands the tray during
+  // the drag without touching the user's manual open/closed preference.
+  const [trayHover, setTrayHover] = useState(false);
   // Unsaved edits, stashed when the user clicks away mid-edit (see onDraft).
   const [drafts, setDrafts] = useState<Record<string, { title: string; body: string }>>({});
 
@@ -293,16 +298,38 @@ export default function Board() {
     );
   }
 
+  // Pointer-first collision detection. The dense month grid keeps corner-based
+  // detection, but the parking lot is matched by the cursor being *within* it —
+  // so it catches a drop even when collapsed/empty (a small rect that
+  // closestCorners would never pick over a nearby grid cell).
+  const collisionDetection = useCallback<CollisionDetection>((args) => {
+    const pointer = pointerWithin(args);
+    const trayItems = itemsRef.current[TRAY_ID] ?? [];
+    const onTray =
+      pointer.find((c) => String(c.id) === TRAY_ID) ??
+      pointer.find((c) => trayItems.includes(String(c.id)));
+    if (onTray) {
+      // Prefer a specific tray card (gives a stack index); else the container.
+      const card = pointer.find((c) => trayItems.includes(String(c.id)));
+      return card ? [card] : [onTray];
+    }
+    const corners = closestCorners(args);
+    return corners.length ? corners : pointer;
+  }, []);
+
   function handleDragStart(e: DragStartEvent) {
     pushHistory();
+    setTrayHover(false);
     setActiveId(String(e.active.id));
   }
 
   function handleDragOver(e: DragOverEvent) {
     const { active, over } = e;
+    const overC = over ? findContainer(String(over.id)) : undefined;
+    // Expand the tray while the card is over it; compress when it leaves.
+    setTrayHover(overC === TRAY_ID);
     if (!over) return;
     const activeC = findContainer(String(active.id));
-    const overC = findContainer(String(over.id));
     if (!activeC || !overC || activeC === overC) return;
 
     setItems((prev) => {
@@ -342,6 +369,7 @@ export default function Board() {
       }
     }
     setActiveId(null);
+    setTrayHover(false);
   }
 
   function clearDraft(id: string) {
@@ -483,7 +511,7 @@ export default function Board() {
 
       <DndContext
         sensors={sensors}
-        collisionDetection={closestCorners}
+        collisionDetection={collisionDetection}
         measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
         onDragStart={handleDragStart}
         onDragOver={handleDragOver}
@@ -493,7 +521,7 @@ export default function Board() {
           <Tray
             cardIds={items[TRAY_ID] ?? []}
             cardsById={cardsById}
-            open={trayOpen}
+            open={trayOpen || trayHover}
             dragging={activeId !== null}
             onToggle={() => setTrayOpen((o) => !o)}
             editingId={editingId}

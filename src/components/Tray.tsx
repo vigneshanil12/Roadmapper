@@ -7,8 +7,9 @@ import CardItem from "./CardItem";
 
 // Staging "parking lot" above the grid. Cards are created here neutral-gray and
 // adopt a category color once dragged into a month cell. Collapsed by default;
-// stays a drop target even while collapsed and auto-expands when a card is
-// dragged over it.
+// while a card is dragged it shows a thin "Drop here to park" strip as the
+// catch target, then fully expands the moment the card hovers it (parent drives
+// `open` via trayHover) and compresses again when the card leaves.
 export default function Tray({
   cardIds,
   cardsById,
