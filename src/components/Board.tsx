@@ -72,6 +72,20 @@ export default function Board() {
     setOverflow((p) => (p[cellId] === bottomPx ? p : { ...p, [cellId]: bottomPx }));
   }, []);
 
+  // Per-month value totals, summed per category across both halves. Drives the
+  // colored segment chips in each month header.
+  const monthTotals = useMemo(() => {
+    const m: Record<string, Record<CategoryId, number>> = {};
+    for (const id in cardsById) {
+      const c = cardsById[id];
+      if (c.tray) continue;
+      const key = `${c.col_year}-${c.col_month}`;
+      const row = (m[key] ||= { growth: 0, partner: 0, features: 0, bugs: 0 });
+      row[c.category] += c.value ?? 0;
+    }
+    return m;
+  }, [cardsById]);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const itemsRef = useRef(items);
   const cardsRef = useRef(cardsById);
@@ -622,17 +636,40 @@ export default function Board() {
             >
             {/* Row 1: month headers */}
             <div className="sticky left-0 top-0 z-30 border-b border-r border-slate-200 bg-white" />
-            {months.map((m, i) => (
-              <div
-                key={`${m.year}-${m.month}`}
-                style={{ gridColumn: "span 2" }}
-                className={`sticky top-0 z-20 border-b border-l-2 border-l-slate-400 border-slate-200 bg-sky-100 px-2 py-2 text-center text-sm font-semibold text-sky-900 ${
-                  i === months.length - 1 ? "border-r-2 border-r-slate-400" : "border-r"
-                }`}
-              >
-                {m.label}
-              </div>
-            ))}
+            {months.map((m, i) => {
+              const totals = monthTotals[`${m.year}-${m.month}`];
+              return (
+                <div
+                  key={`${m.year}-${m.month}`}
+                  style={{ gridColumn: "span 2" }}
+                  className={`sticky top-0 z-20 flex h-[37px] items-center justify-between gap-2 border-b border-l-2 border-l-slate-400 border-slate-200 bg-sky-100 px-2 text-sm font-semibold text-sky-900 ${
+                    i === months.length - 1 ? "border-r-2 border-r-slate-400" : "border-r"
+                  }`}
+                >
+                  <span className="shrink-0">{m.label}</span>
+                  {totals && (
+                    <div className="flex shrink-0 items-stretch overflow-hidden rounded-md border border-slate-300/60">
+                      {CATEGORIES.map((cat) => {
+                        const t = totals[cat.id] ?? 0;
+                        if (t <= 0) return null;
+                        return (
+                          <div
+                            key={cat.id}
+                            title={`${cat.label}: ${t}`}
+                            className={`flex min-w-[40px] flex-col items-center ${cat.chipBg}`}
+                          >
+                            <span className={`px-2 text-[13px] font-semibold leading-[18px] ${cat.labelText}`}>
+                              {t}
+                            </span>
+                            <span className={`h-[3px] w-full ${cat.chipBar}`} />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
 
             {/* Row 2: half-month sub headers */}
             <div className="sticky left-0 top-[37px] z-30 border-b border-r border-slate-200 bg-white" />
@@ -766,18 +803,6 @@ function RowFragment({
           ? cellKey(catId, leftCol.year, leftCol.month, leftCol.half)
           : null;
         const reserveTop = leftId && overflow[leftId] ? overflow[leftId] + 6 : 0;
-        // The second-half cell shows the whole month's value total for this row:
-        // sum of card values across both half-columns of the month.
-        let monthTotal: number | null = null;
-        if (c.half === 1) {
-          const sumCell = (cid: string) =>
-            (items[cid] ?? []).reduce(
-              (n, cardId) => n + (cardsById[cardId]?.value ?? 0),
-              0
-            );
-          const firstHalf = cellKey(catId, c.year, c.month, 0);
-          monthTotal = sumCell(firstHalf) + sumCell(id);
-        }
         return (
           <Cell
             key={id}
@@ -788,8 +813,6 @@ function RowFragment({
             colW={colW}
             edgeClass={edgeClass}
             reserveTop={reserveTop}
-            monthTotal={monthTotal}
-            totalColor={labelText}
             onOverflow={onOverflow}
             editingId={editingId}
             drafts={drafts}
