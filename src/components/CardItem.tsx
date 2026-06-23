@@ -1,8 +1,19 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useSortable } from "@dnd-kit/sortable";
+import {
+  useSortable,
+  defaultAnimateLayoutChanges,
+  type AnimateLayoutChanges,
+} from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+
+// Animate position changes even when they come from a programmatic reorder
+// (e.g. a card jumping to the top of its cell on resize), not just drags — so
+// the shift slides instead of snapping. wasDragging:true lets the default
+// helper treat any index change as animatable.
+const animateLayoutChanges: AnimateLayoutChanges = (args) =>
+  defaultAnimateLayoutChanges({ ...args, wasDragging: true });
 import type { Card, CardStatus } from "@/lib/types";
 import { CATEGORY_MAP, type Category } from "@/lib/categories";
 
@@ -55,7 +66,7 @@ export default function CardItem({
 }) {
   const cat = CATEGORY_MAP[card.category];
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: card.id, disabled: editing || overlay });
+    useSortable({ id: card.id, disabled: editing || overlay, animateLayoutChanges });
 
   // Live span while dragging the resize handle; falls back to persisted span.
   const [resizeSpan, setResizeSpan] = useState<number | null>(null);

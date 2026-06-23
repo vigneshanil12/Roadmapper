@@ -101,7 +101,7 @@ export default function Cell({
         if (e.target === e.currentTarget) onAdd(cellId);
       }}
       style={reserveTop ? { paddingTop: reserveTop } : undefined}
-      className={`group/cell relative flex min-h-[96px] flex-col gap-1.5 border-b border-r border-slate-200 p-1.5 ${rowBg} ${edgeClass} ${
+      className={`group/cell relative flex min-h-[96px] flex-col gap-1.5 border-b border-r border-slate-200 p-1.5 transition-[padding] duration-200 ease-out ${rowBg} ${edgeClass} ${
         isOver ? "ring-2 ring-inset ring-slate-400" : ""
       }`}
     >
