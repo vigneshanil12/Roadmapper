@@ -73,13 +73,21 @@ export default function Board() {
 
   // Undo history: snapshots of the full board, newest last. Capped so Ctrl+Z
   // walks back the last ~20 changes.
-  const historyRef = useRef<Array<{ cards: Record<string, Card>; items: Record<string, string[]> }>>([]);
-  function pushHistory() {
+  type Snapshot = { cards: Record<string, Card>; items: Record<string, string[]> };
+  const historyRef = useRef<Array<Snapshot>>([]);
+  // Redo stack: snapshots popped by undo, replayed by Ctrl+Shift+Z. Cleared on
+  // any fresh change (pushHistory) since a new action invalidates the redo path.
+  const redoRef = useRef<Array<Snapshot>>([]);
+  function snapshot(): Snapshot {
     const items = itemsRef.current;
     const cloneItems: Record<string, string[]> = {};
     for (const k in items) cloneItems[k] = [...items[k]];
-    historyRef.current.push({ cards: { ...cardsRef.current }, items: cloneItems });
+    return { cards: { ...cardsRef.current }, items: cloneItems };
+  }
+  function pushHistory() {
+    historyRef.current.push(snapshot());
     if (historyRef.current.length > 20) historyRef.current.shift();
+    redoRef.current = [];
   }
 
   // Load cards.
@@ -280,9 +288,7 @@ export default function Board() {
     }
   }
 
-  function undo() {
-    const snap = historyRef.current.pop();
-    if (!snap) return;
+  function applySnapshot(snap: Snapshot) {
     const live = cardsRef.current;
     setEditingId(null);
     setDrafts({});
@@ -291,14 +297,29 @@ export default function Board() {
     reconcile(live, snap.cards);
   }
 
+  function undo() {
+    const snap = historyRef.current.pop();
+    if (!snap) return;
+    redoRef.current.push(snapshot());
+    applySnapshot(snap);
+  }
+
+  function redo() {
+    const snap = redoRef.current.pop();
+    if (!snap) return;
+    historyRef.current.push(snapshot());
+    applySnapshot(snap);
+  }
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
         const t = e.target as HTMLElement;
-        // Let the browser handle undo inside a focused text field.
+        // Let the browser handle undo/redo inside a focused text field.
         if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return;
         e.preventDefault();
-        undo();
+        if (e.shiftKey) redo();
+        else undo();
       }
     }
     document.addEventListener("keydown", onKey);
