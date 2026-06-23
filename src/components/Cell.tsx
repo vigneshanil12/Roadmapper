@@ -14,8 +14,6 @@ export default function Cell({
   colW,
   edgeClass = "",
   reserveTop = 0,
-  monthTotal = null,
-  totalColor = "",
   onOverflow,
   editingId,
   drafts,
@@ -35,10 +33,6 @@ export default function Cell({
   rowBg: string;
   colW: number;
   edgeClass?: string;
-  // Sum of card values for this category across the whole month, shown at the
-  // month's right edge. Only the second-half cell of each month gets it.
-  monthTotal?: number | null;
-  totalColor?: string;
   // Top padding to reserve because the left-neighbor cell has a wide card
   // overflowing into this column. Pushes this cell's cards clear of it.
   reserveTop?: number;
@@ -134,14 +128,6 @@ export default function Cell({
           );
         })}
       </SortableContext>
-      {monthTotal != null && monthTotal > 0 && (
-        <span
-          title="Total value added this month"
-          className={`pointer-events-none absolute right-1 top-1 z-[6] rounded-full bg-white/85 px-1.5 text-[11px] font-bold leading-[18px] shadow-sm ${totalColor}`}
-        >
-          {monthTotal}
-        </span>
-      )}
       <button
         onClick={() => onAdd(cellId)}
         className="mt-auto self-start rounded px-1.5 py-0.5 text-[11px] text-slate-400 opacity-0 transition hover:bg-black/5 hover:text-slate-600 group-hover/cell:opacity-100"
