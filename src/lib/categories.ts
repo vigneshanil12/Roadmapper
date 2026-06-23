@@ -6,8 +6,9 @@ export interface Category {
   // Tailwind classes tuned to match the FigJam board palette.
   rowBg: string; // category label cell + faint row tint
   labelText: string;
+  labelHex: string; // dark header-copy hex (matches labelText) for done text/tick
   cardBg: string;
-  cardBgFaint: string; // 50% opacity fill for dashed/tentative cards
+  cardBgFaint: string; // 30% opacity fill for dashed/tentative cards
   cardBorder: string;
   cardBorderHex: string; // border hex (matches cardBorder) for custom dashed stroke
   // Value badge fills for value 1/2/3 (lightest → darkest), each "bg + text".
@@ -25,8 +26,9 @@ export const CATEGORIES: Category[] = [
     label: "Growth & User Delight",
     rowBg: "bg-green-100/40",
     labelText: "text-green-800",
+    labelHex: "#166534",
     cardBg: "bg-green-200",
-    cardBgFaint: "bg-green-200/50",
+    cardBgFaint: "bg-green-200/30",
     cardBorder: "border-green-400",
     cardBorderHex: "#4ade80",
     valueFill: [
@@ -43,8 +45,9 @@ export const CATEGORIES: Category[] = [
     label: "Partner Convenience",
     rowBg: "bg-amber-100/40",
     labelText: "text-amber-800",
+    labelHex: "#92400e",
     cardBg: "bg-amber-200",
-    cardBgFaint: "bg-amber-200/50",
+    cardBgFaint: "bg-amber-200/30",
     cardBorder: "border-amber-400",
     cardBorderHex: "#fbbf24",
     valueFill: [
@@ -61,8 +64,9 @@ export const CATEGORIES: Category[] = [
     label: "New Features",
     rowBg: "bg-violet-100/40",
     labelText: "text-violet-800",
+    labelHex: "#5b21b6",
     cardBg: "bg-violet-200",
-    cardBgFaint: "bg-violet-200/50",
+    cardBgFaint: "bg-violet-200/30",
     cardBorder: "border-violet-400",
     cardBorderHex: "#a78bfa",
     valueFill: [
@@ -79,8 +83,9 @@ export const CATEGORIES: Category[] = [
     label: "Bugs",
     rowBg: "bg-red-100/40",
     labelText: "text-red-800",
+    labelHex: "#991b1b",
     cardBg: "bg-red-200",
-    cardBgFaint: "bg-red-200/50",
+    cardBgFaint: "bg-red-200/30",
     cardBorder: "border-red-400",
     cardBorderHex: "#f87171",
     valueFill: [

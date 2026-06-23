@@ -123,24 +123,14 @@ export default function CardItem({
   // Done cards recolor all text/strikethrough/tick to the row-header dark hex
   // (e.g. amber-800 / #92400e); currentColor carries it to line-through + tick.
   const doneText = isDone ? (card.tray ? "text-slate-800" : cat.labelText) : "";
-  // Tentative borders are drawn via background gradients (below), so the box
-  // itself carries no border; everything else gets a solid colored border.
+  // Tentative borders are drawn by an SVG overlay (DashedBorder) that follows
+  // the rounded corners; the box itself carries no border. Others get a solid one.
   const borderClass = isTentative
     ? "border-0"
     : `border ${card.tray ? "border-slate-300" : cat.cardBorder}`;
   const base = `relative rounded-lg px-2.5 py-2 text-[12px] leading-snug shadow-sm ${fill} ${borderClass} ${doneText}`;
-
-  // Custom dashed border for tentative cards: 4 repeating-linear-gradients (one
-  // per edge) give a 2px stroke with longer dashes/gaps than the CSS default.
   const dashHex = card.tray ? "#94a3b8" : cat.cardBorderHex;
-  const dashStyle: React.CSSProperties = isTentative
-    ? {
-        backgroundImage: `repeating-linear-gradient(to right, ${dashHex} 0 8px, transparent 8px 14px), repeating-linear-gradient(to right, ${dashHex} 0 8px, transparent 8px 14px), repeating-linear-gradient(to bottom, ${dashHex} 0 8px, transparent 8px 14px), repeating-linear-gradient(to bottom, ${dashHex} 0 8px, transparent 8px 14px)`,
-        backgroundSize: "100% 2px, 100% 2px, 2px 100%, 2px 100%",
-        backgroundPosition: "0 0, 0 100%, 0 0, 100% 0",
-        backgroundRepeat: "no-repeat",
-      }
-    : {};
+  const tickHex = card.tray ? "#1e293b" : cat.labelHex;
 
   // Wide (span>1) cards overflow into the next column; the neighbor cell reads
   // this flag to reserve top space and avoid overlap. Live span so it reacts
@@ -149,7 +139,8 @@ export default function CardItem({
 
   if (editing) {
     return (
-      <div ref={setNodeRef} data-wide={wide} style={{ ...style, ...dashStyle }} className={base}>
+      <div ref={setNodeRef} data-wide={wide} style={style} className={base}>
+        {isTentative && <DashedBorder color={dashHex} />}
         <CardEditor
           card={card}
           draft={draft}
@@ -176,12 +167,13 @@ export default function CardItem({
     <div
       ref={setNodeRef}
       data-wide={wide}
-      style={{ ...style, ...dashStyle }}
+      style={style}
       {...attributes}
       {...listeners}
       onDoubleClick={() => onStartEdit(card.id)}
       className={`${base} group cursor-grab active:cursor-grabbing`}
     >
+      {isTentative && <DashedBorder color={dashHex} />}
       {draft && (
         <span
           title="Unsaved draft — double-click to keep editing, then Save"
@@ -191,7 +183,11 @@ export default function CardItem({
       <div className="flex items-start justify-between gap-1">
         <div className="flex min-w-0 flex-1 items-start gap-1">
           {done && (
-            <span title="Completed" className="shrink-0 font-semibold leading-snug">
+            <span
+              title="Completed"
+              style={{ backgroundColor: tickHex }}
+              className="mt-px flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-full text-[9px] font-bold leading-none text-white"
+            >
               ✓
             </span>
           )}
@@ -293,6 +289,33 @@ function ValueBadge({
     >
       {v}
     </button>
+  );
+}
+
+// Rounded dashed border for tentative cards, drawn as an SVG stroke so the
+// dashes follow the card's rounded corners (a CSS/gradient border can't, and a
+// plain border-dashed gives no control over dash density). Inset 1px with
+// overflow visible so the 2px stroke isn't clipped at the edges.
+function DashedBorder({ color }: { color: string }) {
+  return (
+    <svg
+      aria-hidden
+      className="pointer-events-none absolute"
+      style={{ top: 1, left: 1, right: 1, bottom: 1, overflow: "visible" }}
+    >
+      <rect
+        x="0"
+        y="0"
+        width="100%"
+        height="100%"
+        rx="7"
+        ry="7"
+        fill="none"
+        stroke={color}
+        strokeWidth="2"
+        strokeDasharray="8 6"
+      />
+    </svg>
   );
 }
 
