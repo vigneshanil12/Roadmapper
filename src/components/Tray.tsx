@@ -7,14 +7,13 @@ import CardItem from "./CardItem";
 
 // Staging "parking lot" above the grid. Cards are created here neutral-gray and
 // adopt a category color once dragged into a month cell. Collapsed by default;
-// while a card is dragged it shows a thin "Drop here to park" strip as the
-// catch target, then fully expands the moment the card hovers it (parent drives
-// `open` via trayHover) and compresses again when the card leaves.
+// stays a thin bar during a drag and only expands when the card hovers it
+// (parent drives `open` via trayHover — pointer collision catches drops on the
+// bar), compressing again when the card leaves.
 export default function Tray({
   cardIds,
   cardsById,
   open,
-  dragging,
   onToggle,
   editingId,
   drafts,
@@ -29,7 +28,6 @@ export default function Tray({
   cardIds: string[];
   cardsById: Record<string, Card>;
   open: boolean;
-  dragging: boolean;
   onToggle: () => void;
   editingId: string | null;
   drafts: Record<string, { title: string; body: string }>;
@@ -102,21 +100,7 @@ export default function Tray({
             </div>
           )}
         </div>
-      ) : (
-        // Collapsed: a generous drop strip so cards can be parked without
-        // expanding the tray (it stays collapsed after the drop).
-        dragging && (
-          <div
-            className={`mx-4 mb-2 flex h-12 items-center justify-center rounded border-2 border-dashed text-[11px] ${
-              isOver
-                ? "border-slate-500 bg-slate-200 text-slate-600"
-                : "border-slate-300 text-slate-400"
-            }`}
-          >
-            Drop here to park
-          </div>
-        )
-      )}
+      ) : null}
     </div>
   );
 }

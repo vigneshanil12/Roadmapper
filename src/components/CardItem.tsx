@@ -307,7 +307,7 @@ function CardEditor({
           if (e.key === "Escape") onCancel(card.id);
         }}
         placeholder="Title"
-        className={`w-full resize-none overflow-hidden bg-transparent text-[12px] font-semibold leading-snug outline-none placeholder:font-normal placeholder:italic placeholder:text-slate-400 ${
+        className={`w-full resize-none overflow-hidden bg-transparent p-0 text-[12px] font-semibold leading-snug outline-none placeholder:font-normal placeholder:italic placeholder:text-slate-400 ${
           done ? "line-through" : ""
         }`}
       />
@@ -336,7 +336,7 @@ function CardEditor({
           if (e.key === "Escape") onCancel(card.id);
         }}
         placeholder="• One bullet per line"
-        className={`mt-0.5 w-full resize-none overflow-hidden bg-transparent text-[12px] leading-snug outline-none placeholder:italic placeholder:text-slate-400 ${
+        className={`mt-0.5 w-full resize-none overflow-hidden bg-transparent p-0 text-[12px] leading-snug outline-none placeholder:italic placeholder:text-slate-400 ${
           done ? "line-through" : ""
         }`}
       />

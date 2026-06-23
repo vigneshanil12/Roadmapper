@@ -386,6 +386,10 @@ export default function Board() {
         }
       }
     }
+    // Card parked via drag — auto-expand so the user sees where it landed.
+    if (activeC && itemsRef.current[TRAY_ID]?.includes(String(active.id))) {
+      setTrayOpen(true);
+    }
     setActiveId(null);
     setTrayHover(false);
   }
@@ -553,7 +557,6 @@ export default function Board() {
             cardIds={items[TRAY_ID] ?? []}
             cardsById={cardsById}
             open={trayOpen || trayHover}
-            dragging={activeId !== null}
             onToggle={() => setTrayOpen((o) => !o)}
             editingId={editingId}
             drafts={drafts}
