@@ -105,6 +105,44 @@ export default function Board() {
     };
   }, [allCellIds]);
 
+  // Poll for changes made by other users. Full re-fetch every 3s, merged into
+  // local state. Paused while this user is dragging (activeId) or editing
+  // (editingId) so remote data never clobbers in-progress local work. Cards
+  // with a stashed draft keep their local copy.
+  const draftsRef = useRef(drafts);
+  draftsRef.current = drafts;
+  useEffect(() => {
+    if (!loaded) return;
+    const id = setInterval(() => {
+      if (activeId || editingId) return;
+      fetch("/api/cards")
+        .then((r) => r.json())
+        .then(({ cards }: { cards: Card[] }) => {
+          // Re-check: user may have started dragging/editing during the fetch.
+          if (activeId || editingId) return;
+          const localDrafts = draftsRef.current;
+          const byId: Record<string, Card> = {};
+          const map: Record<string, string[]> = { [TRAY_ID]: [] };
+          for (const k of allCellIds) map[k] = [];
+          for (const c of cards) {
+            // Preserve a card the user has an unsaved draft on.
+            const card = localDrafts[c.id] ? cardsRef.current[c.id] ?? c : c;
+            byId[c.id] = card;
+            const k = card.tray
+              ? TRAY_ID
+              : cellKey(card.category, card.col_year, card.col_month, card.col_half);
+            (map[k] ||= []).push(c.id);
+          }
+          for (const k in map)
+            map[k].sort((a, b) => byId[a].position - byId[b].position);
+          setCardsById(byId);
+          setItems(map);
+        })
+        .catch(() => {});
+    }, 3000);
+    return () => clearInterval(id);
+  }, [loaded, activeId, editingId, allCellIds]);
+
   // Scroll to current month on first load.
   useEffect(() => {
     if (loaded && scrollRef.current) {
