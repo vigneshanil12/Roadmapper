@@ -17,9 +17,11 @@ export default function CardItem({
   card,
   editing,
   colW,
+  draft = null,
   onStartEdit,
   onSave,
   onCancel,
+  onDraft,
   onDelete,
   onCycleStatus,
   onResize,
@@ -28,9 +30,11 @@ export default function CardItem({
   card: Card;
   editing: boolean;
   colW: number;
+  draft?: { title: string; body: string } | null;
   onStartEdit: (id: string) => void;
   onSave: (id: string, patch: Partial<Card>) => void;
   onCancel: (id: string) => void;
+  onDraft?: (id: string, patch: { title: string; body: string }) => void;
   onDelete: (id: string) => void;
   onCycleStatus: (id: string) => void;
   onResize: (id: string, span: number) => void;
@@ -92,12 +96,23 @@ export default function CardItem({
   if (editing) {
     return (
       <div ref={setNodeRef} style={style} className={base}>
-        <CardEditor card={card} done={card.status === "done"} onSave={onSave} onCancel={onCancel} />
+        <CardEditor
+          card={card}
+          draft={draft}
+          done={card.status === "done"}
+          onSave={onSave}
+          onCancel={onCancel}
+          onDraft={onDraft}
+        />
       </div>
     );
   }
 
-  const bullets = card.body
+  // A draft (unsaved edit, stashed when the user clicked away) shadows the
+  // saved title/body until they reopen the card and Save or discard it.
+  const shownTitle = draft ? draft.title : card.title;
+  const shownBody = draft ? draft.body : card.body;
+  const bullets = shownBody
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);
@@ -114,13 +129,19 @@ export default function CardItem({
         done ? "opacity-70" : ""
       }`}
     >
+      {draft && (
+        <span
+          title="Unsaved draft — double-click to keep editing, then Save"
+          className="absolute -left-1 -top-1 z-10 h-2.5 w-2.5 rounded-full bg-amber-400 ring-2 ring-white"
+        />
+      )}
       <div className="flex items-start justify-between gap-1">
         <div className="min-w-0 flex-1">
-          {card.title && (
+          {shownTitle && (
             <div
               className={`font-semibold ${done ? "line-through" : ""}`}
             >
-              {card.title}
+              {shownTitle}
             </div>
           )}
           {bullets.length > 0 && (
@@ -133,7 +154,7 @@ export default function CardItem({
               ))}
             </ul>
           )}
-          {!card.title && bullets.length === 0 && (
+          {!shownTitle && bullets.length === 0 && (
             <span className="italic text-slate-500">Empty — double-click</span>
           )}
         </div>
@@ -178,6 +199,7 @@ function IconBtn({
     <button
       title={title}
       onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
       onClick={(e) => {
         e.stopPropagation();
         onClick();
@@ -189,21 +211,45 @@ function IconBtn({
   );
 }
 
+// Body editing keeps a literal "• " in front of every line so bullets stay
+// visible while typing. We strip them again before persisting.
+function withBullets(raw: string): string {
+  const lines = raw.split("\n").map((l) => l.replace(/^•\s?/, ""));
+  return (lines.length ? lines : [""]).map((l) => `• ${l}`).join("\n");
+}
+function stripBullets(text: string): string {
+  return text
+    .split("\n")
+    .map((l) => l.replace(/^•\s?/, "").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
 function CardEditor({
   card,
+  draft,
   done,
   onSave,
   onCancel,
+  onDraft,
 }: {
   card: Card;
+  draft: { title: string; body: string } | null;
   done: boolean;
   onSave: (id: string, patch: Partial<Card>) => void;
   onCancel: (id: string) => void;
+  onDraft?: (id: string, patch: { title: string; body: string }) => void;
 }) {
-  const [title, setTitle] = useState(card.title);
-  const [body, setBody] = useState(card.body);
+  const initTitle = draft ? draft.title : card.title;
+  const initBody = draft ? draft.body : card.body;
+  const [title, setTitle] = useState(initTitle);
+  const [body, setBody] = useState(withBullets(initBody));
+  const rootRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+  // Latest values for the outside-click handler, which runs once on mount.
+  const valsRef = useRef({ title, body });
+  valsRef.current = { title, body };
 
   // Grow textareas to fit content so editing sits exactly where the text shows.
   function autosize(el: HTMLTextAreaElement | null) {
@@ -222,12 +268,29 @@ function CardEditor({
     autosize(bodyRef.current);
   }, []);
 
+  // Clicking anywhere outside the card stashes the in-progress text as a draft
+  // and exits edit mode (instead of losing it). Save/Cancel handle commit/discard.
+  useEffect(() => {
+    if (!onDraft) return;
+    function onDown(e: PointerEvent) {
+      if (rootRef.current?.contains(e.target as Node)) return;
+      const { title, body } = valsRef.current;
+      onDraft!(card.id, { title: title.trim(), body: stripBullets(body) });
+    }
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [card.id, onDraft]);
+
   function save() {
-    onSave(card.id, { title: title.trim(), body: body.trim() });
+    onSave(card.id, { title: title.trim(), body: stripBullets(body) });
   }
 
   return (
-    <div onPointerDown={(e) => e.stopPropagation()} className="space-y-1">
+    <div
+      ref={rootRef}
+      onPointerDown={(e) => e.stopPropagation()}
+      className="space-y-1"
+    >
       {/* Title — borderless, rendered exactly like the card title. */}
       <textarea
         ref={titleRef}
@@ -249,7 +312,7 @@ function CardEditor({
           done ? "line-through" : ""
         }`}
       />
-      {/* Body — borderless, one bullet per line, rendered like the bullet list. */}
+      {/* Body — one bullet per line; "• " prefixes are kept live and stripped on save. */}
       <textarea
         ref={bodyRef}
         value={body}
@@ -259,9 +322,21 @@ function CardEditor({
           autosize(e.target);
         }}
         onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            // Start the next line already bulleted.
+            e.preventDefault();
+            const el = e.currentTarget;
+            const pos = el.selectionStart;
+            const next = body.slice(0, pos) + "\n• " + body.slice(el.selectionEnd);
+            setBody(next);
+            requestAnimationFrame(() => {
+              el.selectionStart = el.selectionEnd = pos + 3;
+              autosize(el);
+            });
+          }
           if (e.key === "Escape") onCancel(card.id);
         }}
-        placeholder="One bullet per line"
+        placeholder="• One bullet per line"
         className={`w-full resize-none overflow-hidden bg-transparent text-[12px] leading-snug outline-none placeholder:italic placeholder:text-slate-400 ${
           done ? "line-through" : ""
         }`}

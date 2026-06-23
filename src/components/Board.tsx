@@ -57,12 +57,25 @@ export default function Board() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [trayOpen, setTrayOpen] = useState(false);
+  // Unsaved edits, stashed when the user clicks away mid-edit (see onDraft).
+  const [drafts, setDrafts] = useState<Record<string, { title: string; body: string }>>({});
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const itemsRef = useRef(items);
   const cardsRef = useRef(cardsById);
   itemsRef.current = items;
   cardsRef.current = cardsById;
+
+  // Undo history: snapshots of the full board, newest last. Capped so Ctrl+Z
+  // walks back the last ~20 changes.
+  const historyRef = useRef<Array<{ cards: Record<string, Card>; items: Record<string, string[]> }>>([]);
+  function pushHistory() {
+    const items = itemsRef.current;
+    const cloneItems: Record<string, string[]> = {};
+    for (const k in items) cloneItems[k] = [...items[k]];
+    historyRef.current.push({ cards: { ...cardsRef.current }, items: cloneItems });
+    if (historyRef.current.length > 20) historyRef.current.shift();
+  }
 
   // Load cards.
   useEffect(() => {
@@ -168,6 +181,69 @@ export default function Board() {
     }
   }, [items, activeId, loaded]);
 
+  // Push the server back to a restored snapshot: recreate cards that were
+  // deleted, delete cards that were added, PATCH the ones that changed.
+  function reconcile(
+    live: Record<string, Card>,
+    snap: Record<string, Card>
+  ) {
+    const payload = (c: Card) => ({
+      title: c.title,
+      body: c.body,
+      category: c.category,
+      col_year: c.col_year,
+      col_month: c.col_month,
+      col_half: c.col_half,
+      span: c.span,
+      position: c.position,
+      status: c.status,
+      tray: c.tray,
+    });
+    for (const id in snap) {
+      if (!live[id]) {
+        fetch("/api/cards", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, ...payload(snap[id]) }),
+        });
+      } else if (JSON.stringify(payload(live[id])) !== JSON.stringify(payload(snap[id]))) {
+        fetch(`/api/cards/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload(snap[id])),
+        });
+      }
+    }
+    for (const id in live) {
+      if (!snap[id]) fetch(`/api/cards/${id}`, { method: "DELETE" });
+    }
+  }
+
+  function undo() {
+    const snap = historyRef.current.pop();
+    if (!snap) return;
+    const live = cardsRef.current;
+    setEditingId(null);
+    setDrafts({});
+    setCardsById(snap.cards);
+    setItems(snap.items);
+    reconcile(live, snap.cards);
+  }
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
+        const t = e.target as HTMLElement;
+        // Let the browser handle undo inside a focused text field.
+        if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return;
+        e.preventDefault();
+        undo();
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
   );
@@ -180,6 +256,7 @@ export default function Board() {
   }
 
   function handleDragStart(e: DragStartEvent) {
+    pushHistory();
     setActiveId(String(e.active.id));
   }
 
@@ -229,8 +306,20 @@ export default function Board() {
     setActiveId(null);
   }
 
+  function clearDraft(id: string) {
+    setDrafts((d) => {
+      if (!(id in d)) return d;
+      const n = { ...d };
+      delete n[id];
+      return n;
+    });
+  }
+
   // ---- card CRUD ----
-  async function addCard(cellId: string) {
+  // Optimistic: the card appears (and is editable) instantly with a client-made
+  // id; the POST runs in the background using that same id.
+  function addCard(cellId: string) {
+    pushHistory();
     const isTray = cellId === TRAY_ID;
     // Tray cards have no real column yet; default to the current half-month so
     // the stored col_* are valid until the card is dropped into a cell.
@@ -247,29 +336,32 @@ export default function Board() {
           return { category, col_year: year, col_month: month, col_half: half };
         })();
     const position = itemsRef.current[cellId]?.length ?? 0;
-    const res = await fetch("/api/cards", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: "",
-        body: "",
-        ...loc,
-        span: 1,
-        position,
-        status: "normal",
-        tray: isTray,
-      }),
-    });
-    const { card } = (await res.json()) as { card: Card };
+    const card: Card = {
+      id: crypto.randomUUID(),
+      title: "",
+      body: "",
+      ...loc,
+      span: 1,
+      position,
+      status: "normal",
+      tray: isTray,
+    };
     if (isTray) setTrayOpen(true);
     setCardsById((p) => ({ ...p, [card.id]: card }));
     setItems((p) => ({ ...p, [cellId]: [...(p[cellId] ?? []), card.id] }));
     setEditingId(card.id);
+    fetch("/api/cards", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(card),
+    });
   }
 
   function saveCard(id: string, patch: Partial<Card>) {
+    pushHistory();
+    clearDraft(id);
     setCardsById((p) => ({ ...p, [id]: { ...p[id], ...patch } }));
-    setEditingId(null);
+    setEditingId((e) => (e === id ? null : e));
     fetch(`/api/cards/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -277,9 +369,22 @@ export default function Board() {
     });
   }
 
-  // Exit edit without saving. A never-saved (empty) card is discarded.
+  // Stash an in-progress edit as a draft and leave edit mode (triggered by
+  // clicking outside the card). A never-touched empty card is just discarded.
+  function draftEdit(id: string, patch: { title: string; body: string }) {
+    const card = cardsRef.current[id];
+    if (!patch.title && !patch.body && card && !card.title.trim() && !card.body.trim()) {
+      deleteCard(id);
+      return;
+    }
+    setDrafts((d) => ({ ...d, [id]: patch }));
+    setEditingId((e) => (e === id ? null : e));
+  }
+
+  // Exit edit, discarding any draft. A never-saved (empty) card is removed.
   function cancelEdit(id: string) {
     const card = cardsRef.current[id];
+    clearDraft(id);
     if (card && !card.title.trim() && !card.body.trim()) {
       deleteCard(id);
       return;
@@ -288,6 +393,8 @@ export default function Board() {
   }
 
   function deleteCard(id: string) {
+    pushHistory();
+    clearDraft(id);
     setEditingId((e) => (e === id ? null : e));
     setCardsById((p) => {
       const n = { ...p };
@@ -351,12 +458,13 @@ export default function Board() {
             open={trayOpen}
             dragging={activeId !== null}
             onToggle={() => setTrayOpen((o) => !o)}
-            onExpand={() => setTrayOpen(true)}
             editingId={editingId}
+            drafts={drafts}
             onAdd={addCard}
             onStartEdit={setEditingId}
             onSave={saveCard}
             onCancel={cancelEdit}
+            onDraft={draftEdit}
             onDelete={deleteCard}
             onCycleStatus={cycleStatus}
           />
@@ -406,10 +514,12 @@ export default function Board() {
                 items={items}
                 cardsById={cardsById}
                 editingId={editingId}
+                drafts={drafts}
                 onAdd={addCard}
                 onStartEdit={setEditingId}
                 onSave={saveCard}
                 onCancel={cancelEdit}
+                onDraft={draftEdit}
                 onDelete={deleteCard}
                 onCycleStatus={cycleStatus}
                 onResize={resizeCard}
@@ -451,10 +561,12 @@ function RowFragment({
   items,
   cardsById,
   editingId,
+  drafts,
   onAdd,
   onStartEdit,
   onSave,
   onCancel,
+  onDraft,
   onDelete,
   onCycleStatus,
   onResize,
@@ -469,10 +581,12 @@ function RowFragment({
   items: Record<string, string[]>;
   cardsById: Record<string, Card>;
   editingId: string | null;
+  drafts: Record<string, { title: string; body: string }>;
   onAdd: (cellId: string) => void;
   onStartEdit: (id: string) => void;
   onSave: (id: string, patch: Partial<Card>) => void;
   onCancel: (id: string) => void;
+  onDraft: (id: string, patch: { title: string; body: string }) => void;
   onDelete: (id: string) => void;
   onCycleStatus: (id: string) => void;
   onResize: (id: string, span: number) => void;
@@ -499,10 +613,12 @@ function RowFragment({
             colW={colW}
             edgeClass={edgeClass}
             editingId={editingId}
+            drafts={drafts}
             onAdd={onAdd}
             onStartEdit={onStartEdit}
             onSave={onSave}
             onCancel={onCancel}
+            onDraft={onDraft}
             onDelete={onDelete}
             onCycleStatus={onCycleStatus}
             onResize={onResize}
