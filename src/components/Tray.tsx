@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
 import { TRAY_ID, type Card } from "@/lib/types";
@@ -16,12 +15,13 @@ export default function Tray({
   open,
   dragging,
   onToggle,
-  onExpand,
   editingId,
+  drafts,
   onAdd,
   onStartEdit,
   onSave,
   onCancel,
+  onDraft,
   onDelete,
   onCycleStatus,
 }: {
@@ -30,21 +30,17 @@ export default function Tray({
   open: boolean;
   dragging: boolean;
   onToggle: () => void;
-  onExpand: () => void;
   editingId: string | null;
+  drafts: Record<string, { title: string; body: string }>;
   onAdd: (cellId: string) => void;
   onStartEdit: (id: string) => void;
   onSave: (id: string, patch: Partial<Card>) => void;
   onCancel: (id: string) => void;
+  onDraft: (id: string, patch: { title: string; body: string }) => void;
   onDelete: (id: string) => void;
   onCycleStatus: (id: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: TRAY_ID });
-
-  // Auto-expand when something is dragged over the collapsed tray.
-  useEffect(() => {
-    if (isOver && !open) onExpand();
-  }, [isOver, open, onExpand]);
 
   return (
     <div
@@ -86,9 +82,11 @@ export default function Tray({
                     card={card}
                     editing={editingId === id}
                     colW={0}
+                    draft={drafts[id] ?? null}
                     onStartEdit={onStartEdit}
                     onSave={onSave}
                     onCancel={onCancel}
+                    onDraft={onDraft}
                     onDelete={onDelete}
                     onCycleStatus={onCycleStatus}
                     onResize={() => {}}
@@ -104,9 +102,16 @@ export default function Tray({
           )}
         </div>
       ) : (
-        // Collapsed: thin drop strip so cards can still be parked here.
+        // Collapsed: a generous drop strip so cards can be parked without
+        // expanding the tray (it stays collapsed after the drop).
         dragging && (
-          <div className="mx-4 mb-1.5 flex h-6 items-center justify-center rounded border border-dashed border-slate-300 text-[10px] text-slate-400">
+          <div
+            className={`mx-4 mb-2 flex h-12 items-center justify-center rounded border-2 border-dashed text-[11px] ${
+              isOver
+                ? "border-slate-500 bg-slate-200 text-slate-600"
+                : "border-slate-300 text-slate-400"
+            }`}
+          >
             Drop here to park
           </div>
         )

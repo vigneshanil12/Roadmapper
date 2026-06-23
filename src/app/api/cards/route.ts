@@ -17,6 +17,7 @@ export async function POST(req: NextRequest) {
   const { data, error } = await sb
     .from("cards")
     .insert({
+      ...(body.id ? { id: body.id } : {}),
       title: body.title ?? "",
       body: body.body ?? "",
       category: body.category,

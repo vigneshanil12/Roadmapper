@@ -13,10 +13,12 @@ export default function Cell({
   colW,
   edgeClass = "",
   editingId,
+  drafts,
   onAdd,
   onStartEdit,
   onSave,
   onCancel,
+  onDraft,
   onDelete,
   onCycleStatus,
   onResize,
@@ -28,10 +30,12 @@ export default function Cell({
   colW: number;
   edgeClass?: string;
   editingId: string | null;
+  drafts: Record<string, { title: string; body: string }>;
   onAdd: (cellId: string) => void;
   onStartEdit: (id: string) => void;
   onSave: (id: string, patch: Partial<Card>) => void;
   onCancel: (id: string) => void;
+  onDraft: (id: string, patch: { title: string; body: string }) => void;
   onDelete: (id: string) => void;
   onCycleStatus: (id: string) => void;
   onResize: (id: string, span: number) => void;
@@ -58,9 +62,11 @@ export default function Cell({
               card={card}
               editing={editingId === id}
               colW={colW}
+              draft={drafts[id] ?? null}
               onStartEdit={onStartEdit}
               onSave={onSave}
               onCancel={onCancel}
+              onDraft={onDraft}
               onDelete={onDelete}
               onCycleStatus={onCycleStatus}
               onResize={onResize}
