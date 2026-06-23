@@ -11,6 +11,7 @@ export default function Cell({
   cardsById,
   rowBg,
   colW,
+  edgeClass = "",
   editingId,
   onAdd,
   onStartEdit,
@@ -24,6 +25,7 @@ export default function Cell({
   cardsById: Record<string, Card>;
   rowBg: string;
   colW: number;
+  edgeClass?: string;
   editingId: string | null;
   onAdd: (cellId: string) => void;
   onStartEdit: (id: string) => void;
@@ -40,7 +42,7 @@ export default function Cell({
       onDoubleClick={(e) => {
         if (e.target === e.currentTarget) onAdd(cellId);
       }}
-      className={`group/cell relative flex min-h-[96px] flex-col gap-1.5 border-b border-r border-slate-200 p-1.5 ${rowBg} ${
+      className={`group/cell relative flex min-h-[96px] flex-col gap-1.5 border-b border-r border-slate-200 p-1.5 ${rowBg} ${edgeClass} ${
         isOver ? "ring-2 ring-inset ring-slate-400" : ""
       }`}
     >

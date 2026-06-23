@@ -55,7 +55,7 @@ export default function Board() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [trayOpen, setTrayOpen] = useState(true);
+  const [trayOpen, setTrayOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const itemsRef = useRef(items);
@@ -337,7 +337,9 @@ export default function Board() {
             cardIds={items[TRAY_ID] ?? []}
             cardsById={cardsById}
             open={trayOpen}
+            dragging={activeId !== null}
             onToggle={() => setTrayOpen((o) => !o)}
+            onExpand={() => setTrayOpen(true)}
             editingId={editingId}
             onAdd={addCard}
             onStartEdit={setEditingId}
@@ -352,11 +354,13 @@ export default function Board() {
             >
             {/* Row 1: month headers */}
             <div className="sticky left-0 top-0 z-30 border-b border-r border-slate-200 bg-white" />
-            {months.map((m) => (
+            {months.map((m, i) => (
               <div
                 key={`${m.year}-${m.month}`}
                 style={{ gridColumn: "span 2" }}
-                className="sticky top-0 z-20 border-b border-r border-slate-200 bg-sky-100 px-2 py-2 text-center text-sm font-semibold text-sky-900"
+                className={`sticky top-0 z-20 border-b border-l-2 border-l-slate-400 border-slate-200 bg-sky-100 px-2 py-2 text-center text-sm font-semibold text-sky-900 ${
+                  i === months.length - 1 ? "border-r-2 border-r-slate-400" : "border-r"
+                }`}
               >
                 {m.label}
               </div>
@@ -364,10 +368,12 @@ export default function Board() {
 
             {/* Row 2: half-month sub headers */}
             <div className="sticky left-0 top-[37px] z-30 border-b border-r border-slate-200 bg-white" />
-            {cols.map((c) => (
+            {cols.map((c, i) => (
               <div
                 key={`h-${c.key}`}
-                className="sticky top-[37px] z-20 border-b border-r border-slate-200 bg-slate-50 px-2 py-1 text-center text-[11px] text-slate-500"
+                className={`sticky top-[37px] z-20 border-b border-r border-slate-200 bg-slate-50 px-2 py-1 text-center text-[11px] text-slate-500 ${
+                  c.half === 0 ? "border-l-2 border-l-slate-400" : ""
+                } ${i === cols.length - 1 ? "border-r-2 border-r-slate-400" : ""}`}
               >
                 {c.label}
               </div>
@@ -461,8 +467,11 @@ function RowFragment({
       >
         <span className={`text-sm font-bold ${labelText}`}>{label}</span>
       </div>
-      {cols.map((c) => {
+      {cols.map((c, i) => {
         const id = cellKey(catId, c.year, c.month, c.half);
+        const edgeClass = `${c.half === 0 ? "border-l-2 border-l-slate-400" : ""} ${
+          i === cols.length - 1 ? "border-r-2 border-r-slate-400" : ""
+        }`;
         return (
           <Cell
             key={id}
@@ -471,6 +480,7 @@ function RowFragment({
             cardsById={cardsById}
             rowBg={rowBg}
             colW={colW}
+            edgeClass={edgeClass}
             editingId={editingId}
             onAdd={onAdd}
             onStartEdit={onStartEdit}

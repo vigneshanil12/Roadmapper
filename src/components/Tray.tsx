@@ -1,18 +1,22 @@
 "use client";
 
+import { useEffect } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
 import { TRAY_ID, type Card } from "@/lib/types";
 import CardItem from "./CardItem";
 
 // Staging "parking lot" above the grid. Cards are created here neutral-gray and
-// adopt a category color once dragged into a month cell. Collapsible to reclaim
-// vertical space.
+// adopt a category color once dragged into a month cell. Collapsed by default;
+// stays a drop target even while collapsed and auto-expands when a card is
+// dragged over it.
 export default function Tray({
   cardIds,
   cardsById,
   open,
+  dragging,
   onToggle,
+  onExpand,
   editingId,
   onAdd,
   onStartEdit,
@@ -23,7 +27,9 @@ export default function Tray({
   cardIds: string[];
   cardsById: Record<string, Card>;
   open: boolean;
+  dragging: boolean;
   onToggle: () => void;
+  onExpand: () => void;
   editingId: string | null;
   onAdd: (cellId: string) => void;
   onStartEdit: (id: string) => void;
@@ -33,8 +39,18 @@ export default function Tray({
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: TRAY_ID });
 
+  // Auto-expand when something is dragged over the collapsed tray.
+  useEffect(() => {
+    if (isOver && !open) onExpand();
+  }, [isOver, open, onExpand]);
+
   return (
-    <div className="shrink-0 border-b border-slate-200 bg-slate-50">
+    <div
+      ref={setNodeRef}
+      className={`shrink-0 border-b border-slate-200 bg-slate-50 ${
+        isOver ? "ring-2 ring-inset ring-slate-400" : ""
+      }`}
+    >
       <div className="flex items-center gap-2 px-4 py-1.5">
         <button
           onClick={onToggle}
@@ -53,16 +69,11 @@ export default function Tray({
           + add
         </button>
         <span className="ml-auto text-[11px] text-slate-400">
-          Staging — drag a card into a month
+          Staging — drag a card here to park it, or into a month
         </span>
       </div>
-      {open && (
-        <div
-          ref={setNodeRef}
-          className={`flex min-h-[88px] items-start gap-2 overflow-x-auto px-4 pb-2 pt-0.5 ${
-            isOver ? "ring-2 ring-inset ring-slate-400" : ""
-          }`}
-        >
+      {open ? (
+        <div className="flex min-h-[88px] items-start gap-2 overflow-x-auto px-4 pb-2 pt-0.5">
           <SortableContext items={cardIds} strategy={horizontalListSortingStrategy}>
             {cardIds.map((id) => {
               const card = cardsById[id];
@@ -89,6 +100,13 @@ export default function Tray({
             </div>
           )}
         </div>
+      ) : (
+        // Collapsed: thin drop strip so cards can still be parked here.
+        dragging && (
+          <div className="mx-4 mb-1.5 flex h-6 items-center justify-center rounded border border-dashed border-slate-300 text-[10px] text-slate-400">
+            Drop here to park
+          </div>
+        )
       )}
     </div>
   );
