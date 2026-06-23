@@ -116,6 +116,11 @@ export default function Board() {
   // with a stashed draft keep their local copy.
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
+  // Fields written optimistically (status, span, title, body...) whose PATCH may
+  // still be in flight. The poll keeps the local copy of these fields until the
+  // server echoes the same value back — otherwise a poll fetch that started
+  // before the write lands clobbers it (e.g. status stutters back while cycling).
+  const pendingRef = useRef<Record<string, Partial<Card>>>({});
   useEffect(() => {
     if (!loaded) return;
     const id = setInterval(() => {
@@ -126,12 +131,25 @@ export default function Board() {
           // Re-check: user may have started dragging/editing during the fetch.
           if (activeId || editingId) return;
           const localDrafts = draftsRef.current;
+          const pending = pendingRef.current;
           const byId: Record<string, Card> = {};
           const map: Record<string, string[]> = { [TRAY_ID]: [] };
           for (const k of allCellIds) map[k] = [];
           for (const c of cards) {
             // Preserve a card the user has an unsaved draft on.
-            const card = localDrafts[c.id] ? cardsRef.current[c.id] ?? c : c;
+            let card = c;
+            if (localDrafts[c.id]) {
+              card = cardsRef.current[c.id] ?? c;
+            } else if (pending[c.id]) {
+              // Keep the local copy until the server echoes our write back; then
+              // the write has landed and remote data can take over again.
+              const fields = pending[c.id];
+              const synced = (Object.keys(fields) as (keyof Card)[]).every(
+                (k) => c[k] === fields[k]
+              );
+              if (synced) delete pending[c.id];
+              else card = cardsRef.current[c.id] ?? c;
+            }
             byId[c.id] = card;
             const k = card.tray
               ? TRAY_ID
@@ -426,6 +444,7 @@ export default function Board() {
   function saveCard(id: string, patch: Partial<Card>) {
     pushHistory();
     clearDraft(id);
+    pendingRef.current[id] = { ...pendingRef.current[id], ...patch };
     setCardsById((p) => ({ ...p, [id]: { ...p[id], ...patch } }));
     setEditingId((e) => (e === id ? null : e));
     fetch(`/api/cards/${id}`, {
@@ -441,6 +460,17 @@ export default function Board() {
     const card = cardsRef.current[id];
     if (!patch.title && !patch.body && card && !card.title.trim() && !card.body.trim()) {
       deleteCard(id);
+      return;
+    }
+    // No actual change vs the saved card (and no pre-existing draft): just leave
+    // edit mode without flagging a draft.
+    if (
+      card &&
+      !drafts[id] &&
+      patch.title === card.title.trim() &&
+      patch.body === card.body.trim()
+    ) {
+      setEditingId((e) => (e === id ? null : e));
       return;
     }
     setDrafts((d) => ({ ...d, [id]: patch }));
@@ -461,6 +491,7 @@ export default function Board() {
   function deleteCard(id: string) {
     pushHistory();
     clearDraft(id);
+    delete pendingRef.current[id];
     setEditingId((e) => (e === id ? null : e));
     setCardsById((p) => {
       const n = { ...p };
