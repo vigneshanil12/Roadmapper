@@ -19,6 +19,7 @@ export default function CardItem({
   colW,
   onStartEdit,
   onSave,
+  onCancel,
   onDelete,
   onCycleStatus,
   onResize,
@@ -29,6 +30,7 @@ export default function CardItem({
   colW: number;
   onStartEdit: (id: string) => void;
   onSave: (id: string, patch: Partial<Card>) => void;
+  onCancel: (id: string) => void;
   onDelete: (id: string) => void;
   onCycleStatus: (id: string) => void;
   onResize: (id: string, span: number) => void;
@@ -90,7 +92,7 @@ export default function CardItem({
   if (editing) {
     return (
       <div ref={setNodeRef} style={style} className={base}>
-        <CardEditor card={card} onSave={onSave} onDelete={onDelete} />
+        <CardEditor card={card} done={card.status === "done"} onSave={onSave} onCancel={onCancel} />
       </div>
     );
   }
@@ -137,9 +139,6 @@ export default function CardItem({
         </div>
         {!overlay && (
           <div className="flex shrink-0 flex-col gap-0.5 opacity-0 transition group-hover:opacity-100">
-            <IconBtn title="Edit" onClick={() => onStartEdit(card.id)}>
-              ✎
-            </IconBtn>
             <IconBtn
               title={`Status: ${STATUS_LABEL[card.status]} (click to cycle)`}
               onClick={() => onCycleStatus(card.id)}
@@ -192,66 +191,87 @@ function IconBtn({
 
 function CardEditor({
   card,
+  done,
   onSave,
-  onDelete,
+  onCancel,
 }: {
   card: Card;
+  done: boolean;
   onSave: (id: string, patch: Partial<Card>) => void;
-  onDelete: (id: string) => void;
+  onCancel: (id: string) => void;
 }) {
   const [title, setTitle] = useState(card.title);
   const [body, setBody] = useState(card.body);
-  const titleRef = useRef<HTMLInputElement>(null);
+  const titleRef = useRef<HTMLTextAreaElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+
+  // Grow textareas to fit content so editing sits exactly where the text shows.
+  function autosize(el: HTMLTextAreaElement | null) {
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }
 
   useEffect(() => {
-    titleRef.current?.focus();
+    const el = titleRef.current;
+    if (el) {
+      autosize(el);
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    }
+    autosize(bodyRef.current);
   }, []);
 
   function save() {
-    const t = title.trim();
-    const b = body.trim();
-    if (!t && !b) {
-      onDelete(card.id); // discard empty
-      return;
-    }
-    onSave(card.id, { title: t, body: b });
+    onSave(card.id, { title: title.trim(), body: body.trim() });
   }
 
   return (
-    <div
-      onPointerDown={(e) => e.stopPropagation()}
-      className="space-y-1"
-    >
-      <input
+    <div onPointerDown={(e) => e.stopPropagation()} className="space-y-1">
+      {/* Title — borderless, rendered exactly like the card title. */}
+      <textarea
         ref={titleRef}
         value={title}
-        onChange={(e) => setTitle(e.target.value)}
+        rows={1}
+        onChange={(e) => {
+          setTitle(e.target.value);
+          autosize(e.target);
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
-            save();
+            bodyRef.current?.focus();
           }
-          if (e.key === "Escape") save();
+          if (e.key === "Escape") onCancel(card.id);
         }}
-        placeholder="Title (bold)"
-        className="w-full rounded border border-black/20 bg-white/80 px-1.5 py-1 text-[12px] font-semibold outline-none"
+        placeholder="Title"
+        className={`w-full resize-none overflow-hidden bg-transparent text-[12px] font-semibold leading-snug outline-none placeholder:font-normal placeholder:italic placeholder:text-slate-400 ${
+          done ? "line-through" : ""
+        }`}
       />
+      {/* Body — borderless, one bullet per line, rendered like the bullet list. */}
       <textarea
+        ref={bodyRef}
         value={body}
-        onChange={(e) => setBody(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") save();
+        rows={1}
+        onChange={(e) => {
+          setBody(e.target.value);
+          autosize(e.target);
         }}
-        rows={3}
-        placeholder="Bullets — one per line"
-        className="w-full resize-none rounded border border-black/20 bg-white/80 px-1.5 py-1 text-[12px] outline-none"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onCancel(card.id);
+        }}
+        placeholder="One bullet per line"
+        className={`w-full resize-none overflow-hidden bg-transparent text-[12px] leading-snug outline-none placeholder:italic placeholder:text-slate-400 ${
+          done ? "line-through" : ""
+        }`}
       />
-      <div className="flex justify-between">
+      <div className="flex justify-end gap-1">
         <button
-          onClick={() => onDelete(card.id)}
-          className="rounded px-1.5 py-0.5 text-[11px] text-red-700 hover:bg-red-500/10"
+          onClick={() => onCancel(card.id)}
+          className="rounded px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-black/10"
         >
-          Delete
+          Cancel
         </button>
         <button
           onClick={save}

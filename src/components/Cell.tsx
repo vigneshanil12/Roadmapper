@@ -16,6 +16,7 @@ export default function Cell({
   onAdd,
   onStartEdit,
   onSave,
+  onCancel,
   onDelete,
   onCycleStatus,
   onResize,
@@ -30,6 +31,7 @@ export default function Cell({
   onAdd: (cellId: string) => void;
   onStartEdit: (id: string) => void;
   onSave: (id: string, patch: Partial<Card>) => void;
+  onCancel: (id: string) => void;
   onDelete: (id: string) => void;
   onCycleStatus: (id: string) => void;
   onResize: (id: string, span: number) => void;
@@ -58,6 +60,7 @@ export default function Cell({
               colW={colW}
               onStartEdit={onStartEdit}
               onSave={onSave}
+              onCancel={onCancel}
               onDelete={onDelete}
               onCycleStatus={onCycleStatus}
               onResize={onResize}

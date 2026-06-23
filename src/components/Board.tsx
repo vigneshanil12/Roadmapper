@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
+  MeasuringStrategy,
   PointerSensor,
   closestCorners,
   useSensor,
@@ -276,6 +277,16 @@ export default function Board() {
     });
   }
 
+  // Exit edit without saving. A never-saved (empty) card is discarded.
+  function cancelEdit(id: string) {
+    const card = cardsRef.current[id];
+    if (card && !card.title.trim() && !card.body.trim()) {
+      deleteCard(id);
+      return;
+    }
+    setEditingId((e) => (e === id ? null : e));
+  }
+
   function deleteCard(id: string) {
     setEditingId((e) => (e === id ? null : e));
     setCardsById((p) => {
@@ -328,6 +339,7 @@ export default function Board() {
       <DndContext
         sensors={sensors}
         collisionDetection={closestCorners}
+        measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
         onDragStart={handleDragStart}
         onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}
@@ -344,6 +356,7 @@ export default function Board() {
             onAdd={addCard}
             onStartEdit={setEditingId}
             onSave={saveCard}
+            onCancel={cancelEdit}
             onDelete={deleteCard}
             onCycleStatus={cycleStatus}
           />
@@ -396,6 +409,7 @@ export default function Board() {
                 onAdd={addCard}
                 onStartEdit={setEditingId}
                 onSave={saveCard}
+                onCancel={cancelEdit}
                 onDelete={deleteCard}
                 onCycleStatus={cycleStatus}
                 onResize={resizeCard}
@@ -414,6 +428,7 @@ export default function Board() {
               overlay
               onStartEdit={() => {}}
               onSave={() => {}}
+              onCancel={() => {}}
               onDelete={() => {}}
               onCycleStatus={() => {}}
               onResize={() => {}}
@@ -439,6 +454,7 @@ function RowFragment({
   onAdd,
   onStartEdit,
   onSave,
+  onCancel,
   onDelete,
   onCycleStatus,
   onResize,
@@ -456,6 +472,7 @@ function RowFragment({
   onAdd: (cellId: string) => void;
   onStartEdit: (id: string) => void;
   onSave: (id: string, patch: Partial<Card>) => void;
+  onCancel: (id: string) => void;
   onDelete: (id: string) => void;
   onCycleStatus: (id: string) => void;
   onResize: (id: string, span: number) => void;
@@ -485,6 +502,7 @@ function RowFragment({
             onAdd={onAdd}
             onStartEdit={onStartEdit}
             onSave={onSave}
+            onCancel={onCancel}
             onDelete={onDelete}
             onCycleStatus={onCycleStatus}
             onResize={onResize}
