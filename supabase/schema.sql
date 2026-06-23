@@ -20,3 +20,7 @@ create index if not exists cards_cell_idx
 -- Lock down direct access. App talks to DB only via server (service role),
 -- which bypasses RLS. Enabling RLS with no policies blocks anon/auth keys.
 alter table public.cards enable row level security;
+
+-- service_role bypasses RLS but still needs table-level privileges. Without
+-- this grant, inserts/selects fail with "permission denied for table cards".
+grant all privileges on table public.cards to service_role;
