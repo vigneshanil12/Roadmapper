@@ -12,6 +12,9 @@ export interface Category {
   valueFill: [string, string, string];
   // Value badge for 0: outline only, no fill.
   valueOutline: string;
+  // Month-header total chip: light fill + thick underline bar.
+  chipBg: string;
+  chipBar: string;
 }
 
 export const CATEGORIES: Category[] = [
@@ -28,6 +31,8 @@ export const CATEGORIES: Category[] = [
       "bg-green-700 text-white",
     ],
     valueOutline: "border border-green-500 text-green-700",
+    chipBg: "bg-green-100",
+    chipBar: "bg-green-600",
   },
   {
     id: "partner",
@@ -42,6 +47,8 @@ export const CATEGORIES: Category[] = [
       "bg-amber-700 text-white",
     ],
     valueOutline: "border border-amber-500 text-amber-700",
+    chipBg: "bg-amber-100",
+    chipBar: "bg-amber-600",
   },
   {
     id: "features",
@@ -56,6 +63,8 @@ export const CATEGORIES: Category[] = [
       "bg-violet-700 text-white",
     ],
     valueOutline: "border border-violet-500 text-violet-700",
+    chipBg: "bg-violet-100",
+    chipBar: "bg-violet-600",
   },
   {
     id: "bugs",
@@ -70,6 +79,8 @@ export const CATEGORIES: Category[] = [
       "bg-red-700 text-white",
     ],
     valueOutline: "border border-red-500 text-red-700",
+    chipBg: "bg-red-100",
+    chipBar: "bg-red-600",
   },
 ];
 
