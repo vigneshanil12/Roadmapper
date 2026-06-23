@@ -294,26 +294,22 @@ function ValueBadge({
 
 // Rounded dashed border for tentative cards, drawn as an SVG stroke so the
 // dashes follow the card's rounded corners (a CSS/gradient border can't, and a
-// plain border-dashed gives no control over dash density). Inset 1px with
-// overflow visible so the 2px stroke isn't clipped at the edges.
+// plain border-dashed gives no control over dash density). The svg is sized
+// 100% to the card (explicit w/h, not relying on intrinsic SVG size) and the
+// rect is inset 1px so the 2px stroke sits fully inside the card edges.
 function DashedBorder({ color }: { color: string }) {
   return (
-    <svg
-      aria-hidden
-      className="pointer-events-none absolute"
-      style={{ top: 1, left: 1, right: 1, bottom: 1, overflow: "visible" }}
-    >
+    <svg aria-hidden className="pointer-events-none absolute inset-0 h-full w-full">
       <rect
-        x="0"
-        y="0"
-        width="100%"
-        height="100%"
+        x="1"
+        y="1"
         rx="7"
         ry="7"
         fill="none"
         stroke={color}
         strokeWidth="2"
         strokeDasharray="8 6"
+        style={{ width: "calc(100% - 2px)", height: "calc(100% - 2px)" }}
       />
     </svg>
   );
