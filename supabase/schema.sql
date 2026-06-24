@@ -86,3 +86,18 @@ create index if not exists comments_card_idx on public.comments (card_id, create
 
 alter table public.comments enable row level security;
 grant all privileges on table public.comments to service_role;
+
+-- Shared app settings. A single pinned row (id = 1) holds the AI assistant's
+-- "product context" (mission, target users, team size, goals) that seeds every
+-- assistant answer. Set once by an editor; shared across everyone.
+create table if not exists public.settings (
+  id int primary key default 1,
+  product_context text not null default '',
+  updated_at timestamptz not null default now(),
+  constraint settings_singleton check (id = 1)
+);
+
+insert into public.settings (id) values (1) on conflict (id) do nothing;
+
+alter table public.settings enable row level security;
+grant all privileges on table public.settings to service_role;

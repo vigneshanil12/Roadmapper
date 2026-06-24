@@ -26,6 +26,7 @@ import Cell from "./Cell";
 import CardItem from "./CardItem";
 import Tray from "./Tray";
 import CommentPopover from "./CommentPopover";
+import AssistantPanel from "./AssistantPanel";
 
 const LABEL_W = 168;
 const COL_W = 224;
@@ -206,6 +207,7 @@ export default function Board() {
   const [statusFilter, setStatusFilter] = useState<Set<CardStatus>>(new Set());
   const searchRef = useRef<HTMLInputElement>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
 
   // Live presence — who else has the board open. Avatars in the header.
   const [presence, setPresence] = useState<PresenceUser[]>([]);
@@ -1026,6 +1028,17 @@ export default function Board() {
             </div>
           )}
           <button
+            onClick={() => setAssistantOpen((o) => !o)}
+            title="Ask the planning assistant"
+            className={`rounded border px-2 py-1 ${
+              assistantOpen
+                ? "border-slate-400 bg-slate-100 text-slate-800"
+                : "border-slate-300 hover:bg-slate-100"
+            }`}
+          >
+            ✨ Assistant
+          </button>
+          <button
             onClick={() => setShowHelp(true)}
             title="Keyboard shortcuts (?)"
             className="rounded border border-slate-300 px-2 py-1 hover:bg-slate-100"
@@ -1269,6 +1282,12 @@ export default function Board() {
           onClose={() => setCommentCard(null)}
         />
       )}
+
+      <AssistantPanel
+        open={assistantOpen}
+        onClose={() => setAssistantOpen(false)}
+        isEditor={isEditor}
+      />
     </div>
   );
 }
