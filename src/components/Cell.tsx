@@ -28,6 +28,8 @@ export default function Cell({
   onCycleStatus,
   onCycleValue,
   onResize,
+  commentCounts,
+  onOpenComments,
 }: {
   cellId: string;
   cardIds: string[];
@@ -55,6 +57,8 @@ export default function Cell({
   onCycleStatus: (id: string) => void;
   onCycleValue: (id: string) => void;
   onResize: (id: string, span: number) => void;
+  commentCounts: Record<string, number>;
+  onOpenComments: (id: string, anchor: DOMRect) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: cellId });
   const elRef = useRef<HTMLDivElement | null>(null);
@@ -131,6 +135,8 @@ export default function Cell({
               onCycleStatus={onCycleStatus}
               onCycleValue={onCycleValue}
               onResize={onResize}
+              commentCount={commentCounts[id] ?? 0}
+              onOpenComments={onOpenComments}
             />
           );
         })}

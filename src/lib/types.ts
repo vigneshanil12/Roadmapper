@@ -18,6 +18,16 @@ export interface Card {
 
 export type NewCard = Omit<Card, "id">;
 
+export interface Comment {
+  id: string;
+  card_id: string;
+  author_name: string;
+  author_role: "editor" | "guest";
+  author_color: string;
+  body: string;
+  created_at: string;
+}
+
 // Container id for the staging tray (parking lot above the grid).
 export const TRAY_ID = "tray";
 

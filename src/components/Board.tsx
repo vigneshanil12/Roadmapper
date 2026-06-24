@@ -18,13 +18,14 @@ import {
 import { arrayMove } from "@dnd-kit/sortable";
 import { CATEGORIES } from "@/lib/categories";
 import { buildMonths, currentMonthIndex } from "@/lib/time";
-import { cellKey, TRAY_ID, type Card, type CardStatus, type CategoryId } from "@/lib/types";
+import { cellKey, TRAY_ID, type Card, type CardStatus, type CategoryId, type Comment } from "@/lib/types";
 import { getIdentity, getRole, initials, type Identity } from "@/lib/presence";
 import { getBrowserClient } from "@/lib/supabase-browser";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import Cell from "./Cell";
 import CardItem from "./CardItem";
 import Tray from "./Tray";
+import CommentPopover from "./CommentPopover";
 
 const LABEL_W = 168;
 const COL_W = 224;
@@ -87,14 +88,94 @@ export default function Board() {
   // viewports (phones) where the drag-grid is unusable. Disables every edit
   // affordance; the board becomes a scrollable read-only view.
   const [readOnly, setReadOnly] = useState(false);
+  // Role for permissions that aren't tied to the read-only grid (e.g. resolving
+  // a comment thread, which an editor can do even on a phone where readOnly=true).
+  const [isEditor, setIsEditor] = useState(false);
   useEffect(() => {
     const guest = getRole() === "guest";
+    setIsEditor(!guest);
     const mq = window.matchMedia("(max-width: 767px)");
     const apply = () => setReadOnly(guest || mq.matches);
     apply();
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, []);
+
+  // ---- comments ----
+  // Flat list of all comments, polled like cards so threads stay live. Grouped
+  // by card for per-card counts and the open thread. commentCard holds the card
+  // whose popover is open plus the anchor rect to position it against.
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [commentCard, setCommentCard] = useState<{ id: string; anchor: DOMRect } | null>(null);
+
+  const commentsByCard = useMemo(() => {
+    const m: Record<string, Comment[]> = {};
+    for (const c of comments) (m[c.card_id] ||= []).push(c);
+    return m;
+  }, [comments]);
+  const commentCounts = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const c of comments) m[c.card_id] = (m[c.card_id] ?? 0) + 1;
+    return m;
+  }, [comments]);
+
+  const loadComments = useCallback(() => {
+    fetch("/api/comments")
+      .then((r) => r.json())
+      .then(({ comments }: { comments: Comment[] }) => {
+        if (comments) setComments(comments);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    loadComments();
+    const id = setInterval(loadComments, 5000);
+    return () => clearInterval(id);
+  }, [loadComments]);
+
+  function openComments(id: string, anchor: DOMRect) {
+    setCommentCard({ id, anchor });
+  }
+
+  function postComment(cardId: string, body: string) {
+    const me = identityRef.current ?? getIdentity();
+    // Optimistic: show the comment immediately with a temp id; refetch after the
+    // server stamps the real row (and the authoritative role).
+    const optimistic: Comment = {
+      id: `tmp-${crypto.randomUUID()}`,
+      card_id: cardId,
+      author_name: me.name,
+      author_role: isEditor ? "editor" : "guest",
+      author_color: me.color,
+      body,
+      created_at: new Date().toISOString(),
+    };
+    setComments((p) => [...p, optimistic]);
+    fetch("/api/comments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ card_id: cardId, body, name: me.name, color: me.color }),
+    })
+      .then(() => loadComments())
+      .catch(() => {});
+  }
+
+  function deleteComment(commentId: string) {
+    setComments((p) => p.filter((c) => c.id !== commentId));
+    if (commentId.startsWith("tmp-")) return;
+    fetch(`/api/comments/${commentId}`, { method: "DELETE" })
+      .then(() => loadComments())
+      .catch(() => {});
+  }
+
+  function resolveThread(cardId: string) {
+    setComments((p) => p.filter((c) => c.card_id !== cardId));
+    setCommentCard(null);
+    fetch(`/api/comments?card_id=${cardId}`, { method: "DELETE" })
+      .then(() => loadComments())
+      .catch(() => {});
+  }
 
   // Search + filter. A card "matches" when it passes the text query and any
   // active category/status filters. When nothing is filtered, matchIds is null
@@ -965,6 +1046,8 @@ export default function Board() {
             onDelete={deleteCard}
             onCycleStatus={cycleStatus}
             onCycleValue={cycleValue}
+            commentCounts={commentCounts}
+            onOpenComments={openComments}
           />
           <div ref={scrollRef} onPointerMove={onPointerMove} className="flex-1 overflow-auto">
             <div
@@ -1050,6 +1133,8 @@ export default function Board() {
                 onCycleStatus={cycleStatus}
                 onCycleValue={cycleValue}
                 onResize={resizeCard}
+                commentCounts={commentCounts}
+                onOpenComments={openComments}
               />
             ))}
 
@@ -1138,6 +1223,25 @@ export default function Board() {
           </div>
         </div>
       )}
+
+      {commentCard && (
+        <CommentPopover
+          comments={commentsByCard[commentCard.id] ?? []}
+          anchor={commentCard.anchor}
+          me={{
+            name: identityRef.current?.name ?? "You",
+            color: identityRef.current?.color ?? "#64748b",
+          }}
+          canResolve={isEditor}
+          canDelete={(c) =>
+            isEditor || c.author_name === identityRef.current?.name
+          }
+          onPost={(body) => postComment(commentCard.id, body)}
+          onDeleteComment={deleteComment}
+          onResolve={() => resolveThread(commentCard.id)}
+          onClose={() => setCommentCard(null)}
+        />
+      )}
     </div>
   );
 }
@@ -1167,6 +1271,8 @@ function RowFragment({
   onCycleStatus,
   onCycleValue,
   onResize,
+  commentCounts,
+  onOpenComments,
 }: {
   catId: CategoryId;
   label: string;
@@ -1192,6 +1298,8 @@ function RowFragment({
   onCycleStatus: (id: string) => void;
   onCycleValue: (id: string) => void;
   onResize: (id: string, span: number) => void;
+  commentCounts: Record<string, number>;
+  onOpenComments: (id: string, anchor: DOMRect) => void;
 }) {
   return (
     <>
@@ -1235,6 +1343,8 @@ function RowFragment({
             onCycleStatus={onCycleStatus}
             onCycleValue={onCycleValue}
             onResize={onResize}
+            commentCounts={commentCounts}
+            onOpenComments={onOpenComments}
           />
         );
       })}

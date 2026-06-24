@@ -51,6 +51,8 @@ export default function CardItem({
   onCycleValue,
   onResize,
   overlay = false,
+  commentCount = 0,
+  onOpenComments,
 }: {
   card: Card;
   editing: boolean;
@@ -67,6 +69,8 @@ export default function CardItem({
   onCycleValue: (id: string) => void;
   onResize: (id: string, span: number) => void;
   overlay?: boolean;
+  commentCount?: number;
+  onOpenComments?: (id: string, anchor: DOMRect) => void;
 }) {
   const cat = CATEGORY_MAP[card.category];
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
@@ -171,6 +175,7 @@ export default function CardItem({
     <div
       ref={setNodeRef}
       data-wide={wide}
+      data-card
       style={style}
       {...(readOnly ? {} : attributes)}
       {...(readOnly ? {} : listeners)}
@@ -219,6 +224,15 @@ export default function CardItem({
           </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-0.5">
+          {/* Comment thread — available to editors and view-only guests alike.
+              A filled badge with the count when a thread exists; otherwise a
+              ghost bubble that appears on hover to start one. */}
+          {!overlay && onOpenComments && (
+            <CommentBtn
+              count={commentCount}
+              onOpen={(rect) => onOpenComments(card.id, rect)}
+            />
+          )}
           {/* Value badge — always visible, click to cycle 0→1→2→3. */}
           <ValueBadge
             value={card.value ?? 0}
@@ -316,6 +330,41 @@ function DashedBorder({ color }: { color: string }) {
         style={{ width: "calc(100% - 2px)", height: "calc(100% - 2px)" }}
       />
     </svg>
+  );
+}
+
+// Comment affordance on a card. Anchors the popover to the card's own bounding
+// rect (looked up via the nearest [data-card] ancestor) so the thread opens
+// beside the card, not beside this small button.
+function CommentBtn({
+  count,
+  onOpen,
+}: {
+  count: number;
+  onOpen: (anchor: DOMRect) => void;
+}) {
+  const has = count > 0;
+  return (
+    <button
+      title={has ? `${count} comment${count > 1 ? "s" : ""}` : "Comment"}
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        const card = (e.currentTarget.closest("[data-card]") as HTMLElement) ?? e.currentTarget;
+        onOpen(card.getBoundingClientRect());
+      }}
+      className={`flex h-[18px] items-center gap-0.5 rounded-full px-1 text-[10px] font-bold leading-none transition ${
+        has
+          ? "bg-slate-700 text-white hover:brightness-110"
+          : "text-slate-500 opacity-0 hover:bg-black/10 group-hover:opacity-100"
+      }`}
+    >
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+        <path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H9l-4 4v-4H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
+      </svg>
+      {has && <span>{count}</span>}
+    </button>
   );
 }
 
