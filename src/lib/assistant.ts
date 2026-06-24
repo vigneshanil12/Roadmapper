@@ -1,0 +1,153 @@
+// Server-side helpers for the AI planning assistant. Turns the raw card rows
+// into a compact, signal-rich text snapshot the model can reason over, and
+// frames the model as a product-planning advisor seeded with the team's own
+// product context. Read-only: the assistant answers questions, never mutates.
+
+import type { Card, CategoryId } from "./types";
+
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+const CAT_LABEL: Record<CategoryId, string> = {
+  growth: "Growth & User Delight",
+  partner: "Partner Convenience",
+  features: "New Features",
+  bugs: "Bugs",
+};
+
+const CAT_ORDER: CategoryId[] = ["growth", "partner", "features", "bugs"];
+
+function monthIndex(year: number, month: number): number {
+  return year * 12 + (month - 1);
+}
+
+// Render the whole board as structured text: a summary header with load/risk
+// signals, then a month-by-month breakdown grouped by category, then any parked
+// (tray) cards. Designed so the model can answer both lookup and advisory
+// questions without us pre-computing the judgement.
+export function buildBoardSnapshot(cards: Card[], now = new Date()): string {
+  const curIdx = monthIndex(now.getFullYear(), now.getMonth() + 1);
+  const scheduled = cards.filter((c) => !c.tray);
+  const tray = cards.filter((c) => c.tray);
+
+  const byMonth = new Map<number, Card[]>();
+  for (const c of scheduled) {
+    const k = monthIndex(c.col_year, c.col_month);
+    const arr = byMonth.get(k);
+    if (arr) arr.push(c);
+    else byMonth.set(k, [c]);
+  }
+  const keys = [...byMonth.keys()].sort((a, b) => a - b);
+
+  // Signals for the summary header.
+  const tentative = scheduled.filter((c) => c.status === "tentative").length;
+  const done = scheduled.filter((c) => c.status === "done").length;
+  const slipping = scheduled.filter(
+    (c) => monthIndex(c.col_year, c.col_month) < curIdx && c.status !== "done"
+  );
+  const future = keys.filter((k) => k >= curIdx);
+  let busiest = "";
+  let busiestN = 0;
+  for (const k of future) {
+    const n = byMonth.get(k)!.length;
+    if (n > busiestN) {
+      busiestN = n;
+      busiest = `${MONTHS[k % 12]} ${Math.floor(k / 12)}`;
+    }
+  }
+
+  const out: string[] = [];
+  out.push(
+    `Today: ${MONTHS[now.getMonth()]} ${now.getFullYear()}. ` +
+      `Each month has two cycles (Cycle 1 = days 1–15, Cycle 2 = 16+). ` +
+      `Card status: normal, tentative (not yet committed), done. ` +
+      `Value = impact estimate 0–3 (higher = more impact).`
+  );
+  out.push("");
+  out.push("SUMMARY");
+  out.push(`- Scheduled cards: ${scheduled.length} (${done} done, ${tentative} tentative).`);
+  out.push(`- Parked/unscheduled in tray: ${tray.length}.`);
+  out.push(
+    busiest
+      ? `- Busiest upcoming month: ${busiest} with ${busiestN} cards.`
+      : `- No cards scheduled in the current or future months.`
+  );
+  if (slipping.length) {
+    out.push(
+      `- ${slipping.length} card(s) sit in a past month and are not done (possible slip): ` +
+        slipping.map((c) => `"${c.title || "untitled"}"`).join(", ") +
+        "."
+    );
+  }
+  out.push("");
+
+  for (const k of keys) {
+    const y = Math.floor(k / 12);
+    const m = (k % 12) + 1;
+    const rel = k < curIdx ? " (PAST)" : k === curIdx ? " (CURRENT MONTH)" : "";
+    const monthCards = byMonth.get(k)!;
+    out.push(`## ${MONTHS[m - 1]} ${y}${rel} — ${monthCards.length} card(s)`);
+    for (const cat of CAT_ORDER) {
+      const cc = monthCards
+        .filter((c) => c.category === cat)
+        .sort((a, b) => a.col_half - b.col_half || a.position - b.position);
+      if (!cc.length) continue;
+      out.push(`  ${CAT_LABEL[cat]}:`);
+      for (const c of cc) {
+        const tags = [`Cycle ${c.col_half + 1}`];
+        if (c.status !== "normal") tags.push(c.status);
+        if (c.value > 0) tags.push(`value ${c.value}`);
+        const slip =
+          k < curIdx && c.status !== "done" ? " [UNFINISHED & PAST]" : "";
+        const body = c.body.trim() ? ` — ${c.body.trim().replace(/\n+/g, "; ")}` : "";
+        out.push(`    • ${c.title || "(untitled)"} [${tags.join(", ")}]${slip}${body}`);
+      }
+    }
+    out.push("");
+  }
+
+  if (tray.length) {
+    out.push(`## Parked / unscheduled (staging tray) — ${tray.length} card(s)`);
+    for (const c of tray) {
+      const tags: string[] = [CAT_LABEL[c.category]];
+      if (c.status !== "normal") tags.push(c.status);
+      if (c.value > 0) tags.push(`value ${c.value}`);
+      const body = c.body.trim() ? ` — ${c.body.trim().replace(/\n+/g, "; ")}` : "";
+      out.push(`    • ${c.title || "(untitled)"} [${tags.join(", ")}]${body}`);
+    }
+    out.push("");
+  }
+
+  return out.join("\n");
+}
+
+// Frame the model as a planning advisor and splice in the team's product
+// context. The context blob is the biggest lever on answer quality — without it
+// the model only knows card titles, not the product or the goals behind them.
+export function systemPrompt(productContext: string): string {
+  const ctx = productContext.trim()
+    ? `\n\nPRODUCT CONTEXT (provided by the team — treat as ground truth):\n${productContext.trim()}`
+    : `\n\nNo product context has been set yet. You can still reason about load, balance, and slippage from the board, but if the user asks product-strategy questions, briefly note that adding product context (mission, target users, team size, current goals) via the "Product context" field would sharpen your advice.`;
+
+  return (
+    `You are an experienced product-planning advisor embedded in a team's roadmap tool. ` +
+    `The roadmap is a board with four category rows — Growth & User Delight, Partner Convenience, ` +
+    `New Features, and Bugs — laid out across half-month columns (two cycles per month).\n\n` +
+    `Your job is to help the team plan better: assess whether a month looks overloaded or thin, ` +
+    `flag risks (slipping work, neglected categories, too much tentative work), suggest what to ` +
+    `prioritise, propose new things worth adding, and give a candid product outlook. Reason from ` +
+    `the roadmap snapshot below and the product context.\n\n` +
+    `Guidelines:\n` +
+    `- Be concrete and reference actual cards, months, and categories by name.\n` +
+    `- Quantify load when relevant (e.g. "Cycle 1 of March has 8 cards vs ~3 average").\n` +
+    `- When you make a judgement call (feasibility, capacity), state the assumption it rests on ` +
+    `and ask for the missing input (team size, velocity) rather than guessing silently.\n` +
+    `- Be candid about risk; don't just affirm the plan.\n` +
+    `- You can only read and advise — you cannot add, move, or edit cards. If asked to make a ` +
+    `change, describe exactly what to do on the board instead.\n` +
+    `- Keep answers tight and skimmable. Use short paragraphs or bullets.` +
+    ctx
+  );
+}
