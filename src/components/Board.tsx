@@ -91,15 +91,25 @@ export default function Board() {
   // Role for permissions that aren't tied to the read-only grid (e.g. resolving
   // a comment thread, which an editor can do even on a phone where readOnly=true).
   const [isEditor, setIsEditor] = useState(false);
+  // Phone layout: the sticky category-label column is already narrow and
+  // collapses to a thin bar once the board is scrolled right, freeing screen
+  // width for the cards on small screens.
+  const [isMobile, setIsMobile] = useState(false);
+  const [scrolledRight, setScrolledRight] = useState(false);
   useEffect(() => {
     const guest = getRole() === "guest";
     setIsEditor(!guest);
     const mq = window.matchMedia("(max-width: 767px)");
-    const apply = () => setReadOnly(guest || mq.matches);
+    const apply = () => {
+      setReadOnly(guest || mq.matches);
+      setIsMobile(mq.matches);
+    };
     apply();
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, []);
+  const labelCollapsed = isMobile && scrolledRight;
+  const labelW = isMobile ? (labelCollapsed ? 20 : 92) : LABEL_W;
 
   // ---- comments ----
   // Flat list of all comments, polled like cards so threads stay live. Grouped
@@ -119,11 +129,20 @@ export default function Board() {
     return m;
   }, [comments]);
 
+  // Ids deleted locally whose DELETE may still be in flight. The 5s poll can
+  // fetch a snapshot taken before the delete landed and resurrect the comment
+  // for one tick; we filter those ids out until the server stops returning them.
+  const deletedIdsRef = useRef<Set<string>>(new Set());
   const loadComments = useCallback(() => {
     fetch("/api/comments")
       .then((r) => r.json())
       .then(({ comments }: { comments: Comment[] }) => {
-        if (comments) setComments(comments);
+        if (!comments) return;
+        const pending = deletedIdsRef.current;
+        const present = new Set(comments.map((c) => c.id));
+        // Drop ids the server has confirmed gone; keep hiding the rest.
+        for (const id of pending) if (!present.has(id)) pending.delete(id);
+        setComments(pending.size ? comments.filter((c) => !pending.has(c.id)) : comments);
       })
       .catch(() => {});
   }, []);
@@ -164,12 +183,14 @@ export default function Board() {
   function deleteComment(commentId: string) {
     setComments((p) => p.filter((c) => c.id !== commentId));
     if (commentId.startsWith("tmp-")) return;
+    deletedIdsRef.current.add(commentId);
     fetch(`/api/comments/${commentId}`, { method: "DELETE" })
       .then(() => loadComments())
       .catch(() => {});
   }
 
   function resolveThread(cardId: string) {
+    for (const c of comments) if (c.card_id === cardId) deletedIdsRef.current.add(c.id);
     setComments((p) => p.filter((c) => c.card_id !== cardId));
     setCommentCard(null);
     fetch(`/api/comments?card_id=${cardId}`, { method: "DELETE" })
@@ -916,7 +937,7 @@ export default function Board() {
     window.location.href = "/login";
   }
 
-  const gridCols = `${LABEL_W}px repeat(${cols.length}, ${COL_W}px)`;
+  const gridCols = `${labelW}px repeat(${cols.length}, ${COL_W}px)`;
   const activeCard = activeId ? cardsById[activeId] : null;
 
   return (
@@ -1049,10 +1070,15 @@ export default function Board() {
             commentCounts={commentCounts}
             onOpenComments={openComments}
           />
-          <div ref={scrollRef} onPointerMove={onPointerMove} className="flex-1 overflow-auto">
+          <div
+            ref={scrollRef}
+            onPointerMove={onPointerMove}
+            onScroll={(e) => setScrolledRight(e.currentTarget.scrollLeft > 24)}
+            className="flex-1 overflow-auto"
+          >
             <div
               ref={gridRef}
-              className="relative grid w-max"
+              className="relative grid w-max transition-[grid-template-columns] duration-200 ease-out"
               style={{ gridTemplateColumns: gridCols }}
             >
             {/* Row 1: month headers */}
@@ -1135,6 +1161,7 @@ export default function Board() {
                 onResize={resizeCard}
                 commentCounts={commentCounts}
                 onOpenComments={openComments}
+                labelCollapsed={labelCollapsed}
               />
             ))}
 
@@ -1273,6 +1300,7 @@ function RowFragment({
   onResize,
   commentCounts,
   onOpenComments,
+  labelCollapsed,
 }: {
   catId: CategoryId;
   label: string;
@@ -1300,13 +1328,24 @@ function RowFragment({
   onResize: (id: string, span: number) => void;
   commentCounts: Record<string, number>;
   onOpenComments: (id: string, anchor: DOMRect) => void;
+  labelCollapsed: boolean;
 }) {
   return (
     <>
       <div
-        className={`sticky left-0 z-10 flex items-start border-b border-r border-slate-200 p-2 ${cardBg}`}
+        className={`sticky left-0 z-10 flex overflow-hidden border-b border-r border-slate-200 ${cardBg} ${
+          labelCollapsed ? "items-center justify-center px-0.5 py-2" : "items-start p-2"
+        }`}
       >
-        <span className={`text-sm font-bold ${labelText}`}>{label}</span>
+        <span
+          className={`font-bold ${labelText} ${
+            labelCollapsed
+              ? "whitespace-nowrap text-[10px] [writing-mode:vertical-rl] rotate-180"
+              : "text-sm"
+          }`}
+        >
+          {label}
+        </span>
       </div>
       {cols.map((c, i) => {
         const id = cellKey(catId, c.year, c.month, c.half);
