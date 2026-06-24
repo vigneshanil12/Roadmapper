@@ -19,7 +19,7 @@ import { arrayMove } from "@dnd-kit/sortable";
 import { CATEGORIES } from "@/lib/categories";
 import { buildMonths, currentMonthIndex } from "@/lib/time";
 import { cellKey, TRAY_ID, type Card, type CardStatus, type CategoryId } from "@/lib/types";
-import { getIdentity, initials, type Identity } from "@/lib/presence";
+import { getIdentity, getRole, initials, type Identity } from "@/lib/presence";
 import { getBrowserClient } from "@/lib/supabase-browser";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import Cell from "./Cell";
@@ -29,7 +29,7 @@ import Tray from "./Tray";
 const LABEL_W = 168;
 const COL_W = 224;
 const STATUS_CYCLE: CardStatus[] = ["normal", "done", "tentative"];
-const STATUS_FILTERS: CardStatus[] = ["normal", "done", "tentative"];
+const STATUS_FILTERS: CardStatus[] = ["done", "tentative"];
 
 interface PresenceUser {
   id: string;
@@ -83,14 +83,14 @@ export default function Board() {
     setOverflow((p) => (p[cellId] === bottomPx ? p : { ...p, [cellId]: bottomPx }));
   }, []);
 
-  // Read-only mode: on by default for narrow viewports (phones), where the
-  // drag-grid is unusable. Disables every edit affordance; the board becomes a
-  // scrollable read-only view. Same flag will later also flip on for the
-  // view-only password role.
+  // Read-only mode: always on for guests (view-only role), and on for narrow
+  // viewports (phones) where the drag-grid is unusable. Disables every edit
+  // affordance; the board becomes a scrollable read-only view.
   const [readOnly, setReadOnly] = useState(false);
   useEffect(() => {
+    const guest = getRole() === "guest";
     const mq = window.matchMedia("(max-width: 767px)");
-    const apply = () => setReadOnly(mq.matches);
+    const apply = () => setReadOnly(guest || mq.matches);
     apply();
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
@@ -101,7 +101,6 @@ export default function Board() {
   // (no dimming); otherwise non-matching cards are dimmed in place so their grid
   // position stays as context.
   const [query, setQuery] = useState("");
-  const [catFilter, setCatFilter] = useState<Set<CategoryId>>(new Set());
   const [statusFilter, setStatusFilter] = useState<Set<CardStatus>>(new Set());
   const searchRef = useRef<HTMLInputElement>(null);
   const [showHelp, setShowHelp] = useState(false);
@@ -133,7 +132,7 @@ export default function Board() {
     return m;
   }, [cardsById]);
 
-  const filterActive = query.trim() !== "" || catFilter.size > 0 || statusFilter.size > 0;
+  const filterActive = query.trim() !== "" || statusFilter.size > 0;
   const matchIds = useMemo(() => {
     if (!filterActive) return null;
     const q = query.trim().toLowerCase();
@@ -141,20 +140,12 @@ export default function Board() {
     for (const id in cardsById) {
       const c = cardsById[id];
       const textOk = !q || `${c.title}\n${c.body}`.toLowerCase().includes(q);
-      const catOk = catFilter.size === 0 || catFilter.has(c.category);
       const statusOk = statusFilter.size === 0 || statusFilter.has(c.status);
-      if (textOk && catOk && statusOk) set.add(id);
+      if (textOk && statusOk) set.add(id);
     }
     return set;
-  }, [filterActive, query, catFilter, statusFilter, cardsById]);
+  }, [filterActive, query, statusFilter, cardsById]);
 
-  function toggleCat(id: CategoryId) {
-    setCatFilter((p) => {
-      const n = new Set(p);
-      n.has(id) ? n.delete(id) : n.add(id);
-      return n;
-    });
-  }
   function toggleStatus(s: CardStatus) {
     setStatusFilter((p) => {
       const n = new Set(p);
@@ -164,7 +155,6 @@ export default function Board() {
   }
   function clearFilters() {
     setQuery("");
-    setCatFilter(new Set());
     setStatusFilter(new Set());
   }
 
@@ -879,25 +869,6 @@ export default function Board() {
             )}
           </div>
           <div className="flex items-center gap-1">
-            {CATEGORIES.map((cat) => {
-              const on = catFilter.has(cat.id);
-              return (
-                <button
-                  key={cat.id}
-                  onClick={() => toggleCat(cat.id)}
-                  title={`Filter: ${cat.label}`}
-                  className={`rounded-full border px-2 py-0.5 text-[11px] transition ${
-                    on
-                      ? `${cat.cardBg} ${cat.cardBorder} ${cat.labelText} font-semibold`
-                      : "border-slate-200 text-slate-500 hover:bg-slate-50"
-                  }`}
-                >
-                  {cat.label.split(" ")[0]}
-                </button>
-              );
-            })}
-          </div>
-          <div className="flex items-center gap-1">
             {STATUS_FILTERS.map((s) => {
               const on = statusFilter.has(s);
               return (
@@ -1089,11 +1060,12 @@ export default function Board() {
                 className="pointer-events-none absolute z-40"
                 style={{ left: c.x, top: c.y }}
               >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill={c.color}>
+                <svg width="20" height="20" viewBox="0 0 512 512" fill={c.color}>
                   <path
-                    d="M5 2l14 8.5-6.2 1.2 3.4 6.9-2.7 1.3-3.4-6.9L5 18V2z"
+                    d="M106.66,8.16c-25.2-19.61-61.93-1.64-61.93,30.29v435.11c0,36.38,45.91,52.34,68.47,23.8l107.21-135.59c8.01-10.13,20.2-16.03,33.11-16.03h175.29c36.54,0,52.4-46.23,23.56-68.66L106.66,8.16z"
                     stroke="white"
-                    strokeWidth="1.5"
+                    strokeWidth="26"
+                    strokeLinejoin="round"
                   />
                 </svg>
                 <span
