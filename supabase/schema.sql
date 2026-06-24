@@ -68,3 +68,21 @@ create index if not exists presence_last_seen_idx on public.presence (last_seen)
 
 alter table public.presence enable row level security;
 grant all privileges on table public.presence to service_role;
+
+-- Card comment threads. Each row is one comment anchored to a card. Editors and
+-- view-only guests can both post; the role is stamped server-side from the auth
+-- token (not a client field). Deleting a card cascades its comments away.
+create table if not exists public.comments (
+  id uuid primary key default gen_random_uuid(),
+  card_id uuid not null references public.cards (id) on delete cascade,
+  author_name text not null,
+  author_role text not null,                 -- editor | guest
+  author_color text not null default '#64748b',
+  body text not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists comments_card_idx on public.comments (card_id, created_at);
+
+alter table public.comments enable row level security;
+grant all privileges on table public.comments to service_role;
