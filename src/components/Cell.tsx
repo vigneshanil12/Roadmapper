@@ -15,6 +15,8 @@ export default function Cell({
   edgeClass = "",
   reserveTop = 0,
   onOverflow,
+  readOnly = false,
+  matchIds = null,
   editingId,
   drafts,
   onAdd,
@@ -39,6 +41,9 @@ export default function Cell({
   // Reports this cell's own wide-card overflow (bottom edge px) up to the board,
   // which feeds it to the cell on the right as its reserveTop.
   onOverflow: (cellId: string, bottomPx: number) => void;
+  readOnly?: boolean;
+  // When non-null, a filter is active: cards not in the set are dimmed.
+  matchIds?: Set<string> | null;
   editingId: string | null;
   drafts: Record<string, { title: string; body: string }>;
   onAdd: (cellId: string) => void;
@@ -98,7 +103,7 @@ export default function Cell({
     <div
       ref={setRefs}
       onDoubleClick={(e) => {
-        if (e.target === e.currentTarget) onAdd(cellId);
+        if (!readOnly && e.target === e.currentTarget) onAdd(cellId);
       }}
       style={reserveTop ? { paddingTop: reserveTop } : undefined}
       className={`group/cell relative flex min-h-[96px] flex-col gap-1.5 border-b border-r border-slate-200 p-1.5 transition-[padding] duration-200 ease-out ${rowBg} ${edgeClass} ${
@@ -115,6 +120,8 @@ export default function Cell({
               card={card}
               editing={editingId === id}
               colW={colW}
+              readOnly={readOnly}
+              dim={!!matchIds && !matchIds.has(id)}
               draft={drafts[id] ?? null}
               onStartEdit={onStartEdit}
               onSave={onSave}
@@ -128,12 +135,14 @@ export default function Cell({
           );
         })}
       </SortableContext>
-      <button
-        onClick={() => onAdd(cellId)}
-        className="mt-auto self-start rounded px-1.5 py-0.5 text-[11px] text-slate-400 opacity-0 transition hover:bg-black/5 hover:text-slate-600 group-hover/cell:opacity-100"
-      >
-        + add
-      </button>
+      {!readOnly && (
+        <button
+          onClick={() => onAdd(cellId)}
+          className="mt-auto self-start rounded px-1.5 py-0.5 text-[11px] text-slate-400 opacity-0 transition hover:bg-black/5 hover:text-slate-600 group-hover/cell:opacity-100"
+        >
+          + add
+        </button>
+      )}
     </div>
   );
 }

@@ -19,6 +19,9 @@ import { arrayMove } from "@dnd-kit/sortable";
 import { CATEGORIES } from "@/lib/categories";
 import { buildMonths, currentMonthIndex } from "@/lib/time";
 import { cellKey, TRAY_ID, type Card, type CardStatus, type CategoryId } from "@/lib/types";
+import { getIdentity, initials, type Identity } from "@/lib/presence";
+import { getBrowserClient } from "@/lib/supabase-browser";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import Cell from "./Cell";
 import CardItem from "./CardItem";
 import Tray from "./Tray";
@@ -26,6 +29,14 @@ import Tray from "./Tray";
 const LABEL_W = 168;
 const COL_W = 224;
 const STATUS_CYCLE: CardStatus[] = ["normal", "done", "tentative"];
+const STATUS_FILTERS: CardStatus[] = ["normal", "done", "tentative"];
+
+interface PresenceUser {
+  id: string;
+  name: string;
+  color: string;
+  last_seen: string;
+}
 
 function parseCell(id: string): {
   category: CategoryId;
@@ -72,6 +83,42 @@ export default function Board() {
     setOverflow((p) => (p[cellId] === bottomPx ? p : { ...p, [cellId]: bottomPx }));
   }, []);
 
+  // Read-only mode: on by default for narrow viewports (phones), where the
+  // drag-grid is unusable. Disables every edit affordance; the board becomes a
+  // scrollable read-only view. Same flag will later also flip on for the
+  // view-only password role.
+  const [readOnly, setReadOnly] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const apply = () => setReadOnly(mq.matches);
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+
+  // Search + filter. A card "matches" when it passes the text query and any
+  // active category/status filters. When nothing is filtered, matchIds is null
+  // (no dimming); otherwise non-matching cards are dimmed in place so their grid
+  // position stays as context.
+  const [query, setQuery] = useState("");
+  const [catFilter, setCatFilter] = useState<Set<CategoryId>>(new Set());
+  const [statusFilter, setStatusFilter] = useState<Set<CardStatus>>(new Set());
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [showHelp, setShowHelp] = useState(false);
+
+  // Live presence — who else has the board open. Avatars in the header.
+  const [presence, setPresence] = useState<PresenceUser[]>([]);
+  const identityRef = useRef<Identity | null>(null);
+
+  // Live cursors — other users' pointers, in grid-content coordinates so a
+  // cursor lands on the same cell for everyone regardless of scroll/viewport.
+  // Synced over a Supabase Realtime Broadcast channel (no DB writes).
+  type RemoteCursor = { name: string; color: string; x: number; y: number; t: number };
+  const [cursors, setCursors] = useState<Record<string, RemoteCursor>>({});
+  const gridRef = useRef<HTMLDivElement>(null);
+  const channelRef = useRef<RealtimeChannel | null>(null);
+  const lastSentRef = useRef(0);
+
   // Per-month value totals, summed per category across both halves. Drives the
   // colored segment chips in each month header.
   const monthTotals = useMemo(() => {
@@ -85,6 +132,41 @@ export default function Board() {
     }
     return m;
   }, [cardsById]);
+
+  const filterActive = query.trim() !== "" || catFilter.size > 0 || statusFilter.size > 0;
+  const matchIds = useMemo(() => {
+    if (!filterActive) return null;
+    const q = query.trim().toLowerCase();
+    const set = new Set<string>();
+    for (const id in cardsById) {
+      const c = cardsById[id];
+      const textOk = !q || `${c.title}\n${c.body}`.toLowerCase().includes(q);
+      const catOk = catFilter.size === 0 || catFilter.has(c.category);
+      const statusOk = statusFilter.size === 0 || statusFilter.has(c.status);
+      if (textOk && catOk && statusOk) set.add(id);
+    }
+    return set;
+  }, [filterActive, query, catFilter, statusFilter, cardsById]);
+
+  function toggleCat(id: CategoryId) {
+    setCatFilter((p) => {
+      const n = new Set(p);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  }
+  function toggleStatus(s: CardStatus) {
+    setStatusFilter((p) => {
+      const n = new Set(p);
+      n.has(s) ? n.delete(s) : n.add(s);
+      return n;
+    });
+  }
+  function clearFilters() {
+    setQuery("");
+    setCatFilter(new Set());
+    setStatusFilter(new Set());
+  }
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const itemsRef = useRef(items);
@@ -194,6 +276,144 @@ export default function Board() {
     }, 3000);
     return () => clearInterval(id);
   }, [loaded, activeId, editingId, allCellIds]);
+
+  // Presence: announce this session every 5s and pull the active roster. On tab
+  // close, fire a best-effort leave beacon so the avatar drops immediately
+  // instead of waiting out the 15s active window.
+  useEffect(() => {
+    const me = getIdentity();
+    identityRef.current = me;
+    let alive = true;
+
+    const beat = () => {
+      fetch("/api/presence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(me),
+      }).catch(() => {});
+    };
+    const pull = () => {
+      fetch("/api/presence")
+        .then((r) => r.json())
+        .then(({ users }: { users: PresenceUser[] }) => {
+          if (alive && users) setPresence(users);
+        })
+        .catch(() => {});
+    };
+
+    beat();
+    pull();
+    const id = setInterval(() => {
+      beat();
+      pull();
+    }, 5000);
+
+    // Best-effort leave so the avatar drops at once instead of waiting out the
+    // 15s active window. keepalive lets the DELETE finish after the tab unloads.
+    const leave = () => {
+      fetch("/api/presence", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: me.id }),
+        keepalive: true,
+      }).catch(() => {});
+    };
+    const onHide = () => {
+      if (document.visibilityState === "hidden") leave();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", leave);
+
+    return () => {
+      alive = false;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", leave);
+    };
+  }, []);
+
+  // Live cursors over a Realtime Broadcast channel. Receive others' positions,
+  // drop them on explicit leave, and prune any that go stale (sender closed the
+  // tab without a leave event). No-op when no anon key is configured.
+  useEffect(() => {
+    const sb = getBrowserClient();
+    if (!sb) return;
+    const me = getIdentity();
+    const channel = sb.channel("roadmap-cursors", {
+      config: { broadcast: { self: false } },
+    });
+    channel
+      .on("broadcast", { event: "cursor" }, ({ payload }) => {
+        const p = payload as { id: string } & RemoteCursor;
+        if (p.id === me.id) return;
+        setCursors((prev) => ({
+          ...prev,
+          [p.id]: { name: p.name, color: p.color, x: p.x, y: p.y, t: Date.now() },
+        }));
+      })
+      .on("broadcast", { event: "leave" }, ({ payload }) => {
+        const { id } = payload as { id: string };
+        setCursors((prev) => {
+          if (!(id in prev)) return prev;
+          const n = { ...prev };
+          delete n[id];
+          return n;
+        });
+      })
+      .subscribe();
+    channelRef.current = channel;
+
+    // Drop cursors with no update for 4s (sender left without a leave event).
+    const prune = setInterval(() => {
+      setCursors((prev) => {
+        const now = Date.now();
+        let changed = false;
+        const n: Record<string, RemoteCursor> = {};
+        for (const id in prev) {
+          if (now - prev[id].t < 4000) n[id] = prev[id];
+          else changed = true;
+        }
+        return changed ? n : prev;
+      });
+    }, 1000);
+
+    const leave = () =>
+      channel.send({ type: "broadcast", event: "leave", payload: { id: me.id } });
+    window.addEventListener("pagehide", leave);
+
+    return () => {
+      clearInterval(prune);
+      window.removeEventListener("pagehide", leave);
+      leave();
+      sb.removeChannel(channel);
+      channelRef.current = null;
+    };
+  }, []);
+
+  // Broadcast this user's pointer in grid-content coordinates, throttled to
+  // ~20/s. Coords are relative to the grid's top-left so they map to the same
+  // cell on every client regardless of scroll position or viewport size.
+  const onPointerMove = useCallback((e: React.PointerEvent) => {
+    const ch = channelRef.current;
+    const grid = gridRef.current;
+    const me = identityRef.current;
+    if (!ch || !grid || !me) return;
+    const now = Date.now();
+    if (now - lastSentRef.current < 50) return;
+    lastSentRef.current = now;
+    const rect = grid.getBoundingClientRect();
+    ch.send({
+      type: "broadcast",
+      event: "cursor",
+      payload: {
+        id: me.id,
+        name: me.name,
+        color: me.color,
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      },
+    });
+  }, []);
 
   // Scroll to current month on first load.
   useEffect(() => {
@@ -347,6 +567,37 @@ export default function Board() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
+
+  // Navigation shortcuts: "/" focus search, "?" toggle the help sheet, Esc clears
+  // the filter / closes help. Text fields keep their own Esc behavior (the card
+  // editor cancels) so we only act on Esc from the search box or bare document.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null;
+      const typing = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA");
+      if (e.key === "Escape") {
+        if (showHelp) {
+          setShowHelp(false);
+        } else if (t === searchRef.current) {
+          clearFilters();
+          searchRef.current?.blur();
+        } else if (!typing) {
+          clearFilters();
+        }
+        return;
+      }
+      if (typing) return;
+      if (e.key === "/") {
+        e.preventDefault();
+        searchRef.current?.focus();
+      } else if (e.key === "?") {
+        e.preventDefault();
+        setShowHelp((s) => !s);
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [showHelp]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
@@ -582,6 +833,14 @@ export default function Board() {
   }
 
   async function logout() {
+    const me = identityRef.current;
+    if (me) {
+      await fetch("/api/presence", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: me.id }),
+      }).catch(() => {});
+    }
     await fetch("/api/logout", { method: "POST" });
     window.location.href = "/login";
   }
@@ -591,10 +850,115 @@ export default function Board() {
 
   return (
     <div className="flex h-screen flex-col">
-      <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-2">
+      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-200 bg-white px-4 py-2">
         <h1 className="text-sm font-semibold">Product Roadmap</h1>
+        {readOnly && (
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-500">
+            View only
+          </span>
+        )}
+
+        {/* Search + filters */}
+        <div className="flex flex-1 flex-wrap items-center gap-2">
+          <div className="relative">
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search cards…  ( / )"
+              className="w-44 rounded-md border border-slate-300 px-2 py-1 text-xs outline-none focus:border-slate-500"
+            />
+            {query && (
+              <button
+                onClick={() => setQuery("")}
+                title="Clear"
+                className="absolute right-1 top-1/2 -translate-y-1/2 rounded px-1 text-slate-400 hover:text-slate-700"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            {CATEGORIES.map((cat) => {
+              const on = catFilter.has(cat.id);
+              return (
+                <button
+                  key={cat.id}
+                  onClick={() => toggleCat(cat.id)}
+                  title={`Filter: ${cat.label}`}
+                  className={`rounded-full border px-2 py-0.5 text-[11px] transition ${
+                    on
+                      ? `${cat.cardBg} ${cat.cardBorder} ${cat.labelText} font-semibold`
+                      : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                  }`}
+                >
+                  {cat.label.split(" ")[0]}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-1">
+            {STATUS_FILTERS.map((s) => {
+              const on = statusFilter.has(s);
+              return (
+                <button
+                  key={s}
+                  onClick={() => toggleStatus(s)}
+                  title={`Filter: ${s}`}
+                  className={`rounded-full border px-2 py-0.5 text-[11px] capitalize transition ${
+                    on
+                      ? "border-slate-700 bg-slate-800 font-semibold text-white"
+                      : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                  }`}
+                >
+                  {s}
+                </button>
+              );
+            })}
+          </div>
+          {filterActive && (
+            <button
+              onClick={clearFilters}
+              className="text-[11px] text-slate-400 underline hover:text-slate-700"
+            >
+              clear
+            </button>
+          )}
+        </div>
+
+        {/* Presence + actions */}
         <div className="flex items-center gap-3 text-xs text-slate-500">
-          <span>Double-click a cell to add · drag to move · hover a card for actions</span>
+          {presence.length > 0 && (
+            <div className="flex items-center -space-x-1.5">
+              {presence.slice(0, 6).map((u) => {
+                const isMe = u.id === identityRef.current?.id;
+                return (
+                  <span
+                    key={u.id}
+                    title={isMe ? `${u.name} (you)` : u.name}
+                    style={{ backgroundColor: u.color }}
+                    className={`flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold text-white ring-2 ${
+                      isMe ? "ring-slate-900" : "ring-white"
+                    }`}
+                  >
+                    {initials(u.name)}
+                  </span>
+                );
+              })}
+              {presence.length > 6 && (
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-300 text-[10px] font-bold text-slate-700 ring-2 ring-white">
+                  +{presence.length - 6}
+                </span>
+              )}
+            </div>
+          )}
+          <button
+            onClick={() => setShowHelp(true)}
+            title="Keyboard shortcuts (?)"
+            className="rounded border border-slate-300 px-2 py-1 hover:bg-slate-100"
+          >
+            ?
+          </button>
           <button
             onClick={logout}
             className="rounded border border-slate-300 px-2 py-1 hover:bg-slate-100"
@@ -618,6 +982,8 @@ export default function Board() {
             cardsById={cardsById}
             open={trayOpen || trayHover}
             onToggle={() => setTrayOpen((o) => !o)}
+            readOnly={readOnly}
+            matchIds={matchIds}
             editingId={editingId}
             drafts={drafts}
             onAdd={addCard}
@@ -629,9 +995,10 @@ export default function Board() {
             onCycleStatus={cycleStatus}
             onCycleValue={cycleValue}
           />
-          <div ref={scrollRef} className="flex-1 overflow-auto">
+          <div ref={scrollRef} onPointerMove={onPointerMove} className="flex-1 overflow-auto">
             <div
-              className="grid w-max"
+              ref={gridRef}
+              className="relative grid w-max"
               style={{ gridTemplateColumns: gridCols }}
             >
             {/* Row 1: month headers */}
@@ -699,6 +1066,8 @@ export default function Board() {
                 cardsById={cardsById}
                 overflow={overflow}
                 onOverflow={handleOverflow}
+                readOnly={readOnly}
+                matchIds={matchIds}
                 editingId={editingId}
                 drafts={drafts}
                 onAdd={addCard}
@@ -711,6 +1080,29 @@ export default function Board() {
                 onCycleValue={cycleValue}
                 onResize={resizeCard}
               />
+            ))}
+
+            {/* Live cursors of other users, in grid-content coordinates. */}
+            {Object.entries(cursors).map(([id, c]) => (
+              <div
+                key={id}
+                className="pointer-events-none absolute z-40"
+                style={{ left: c.x, top: c.y }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill={c.color}>
+                  <path
+                    d="M5 2l14 8.5-6.2 1.2 3.4 6.9-2.7 1.3-3.4-6.9L5 18V2z"
+                    stroke="white"
+                    strokeWidth="1.5"
+                  />
+                </svg>
+                <span
+                  style={{ backgroundColor: c.color }}
+                  className="absolute left-3.5 top-3.5 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium text-white shadow"
+                >
+                  {c.name}
+                </span>
+              </div>
             ))}
             </div>
           </div>
@@ -734,6 +1126,46 @@ export default function Board() {
           ) : null}
         </DragOverlay>
       </DndContext>
+
+      {showHelp && (
+        <div
+          onClick={() => setShowHelp(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-xs rounded-xl bg-white p-5 shadow-xl"
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Keyboard shortcuts</h2>
+              <button
+                onClick={() => setShowHelp(false)}
+                className="rounded px-1 text-slate-400 hover:text-slate-700"
+              >
+                ✕
+              </button>
+            </div>
+            <dl className="space-y-1.5 text-xs text-slate-600">
+              {[
+                ["/", "Focus search"],
+                ["?", "Toggle this help"],
+                ["Esc", "Clear filters / close"],
+                ["⌘/Ctrl + Z", "Undo"],
+                ["⌘/Ctrl + ⇧ + Z", "Redo"],
+                ["Double-click cell", "Add a card"],
+                ["Double-click card", "Edit"],
+              ].map(([k, d]) => (
+                <div key={k} className="flex items-center justify-between gap-4">
+                  <span>{d}</span>
+                  <kbd className="rounded border border-slate-300 bg-slate-50 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
+                    {k}
+                  </kbd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -750,6 +1182,8 @@ function RowFragment({
   cardsById,
   overflow,
   onOverflow,
+  readOnly,
+  matchIds,
   editingId,
   drafts,
   onAdd,
@@ -773,6 +1207,8 @@ function RowFragment({
   cardsById: Record<string, Card>;
   overflow: Record<string, number>;
   onOverflow: (cellId: string, bottomPx: number) => void;
+  readOnly: boolean;
+  matchIds: Set<string> | null;
   editingId: string | null;
   drafts: Record<string, { title: string; body: string }>;
   onAdd: (cellId: string) => void;
@@ -814,6 +1250,8 @@ function RowFragment({
             edgeClass={edgeClass}
             reserveTop={reserveTop}
             onOverflow={onOverflow}
+            readOnly={readOnly}
+            matchIds={matchIds}
             editingId={editingId}
             drafts={drafts}
             onAdd={onAdd}

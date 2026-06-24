@@ -39,6 +39,8 @@ export default function CardItem({
   card,
   editing,
   colW,
+  readOnly = false,
+  dim = false,
   draft = null,
   onStartEdit,
   onSave,
@@ -53,6 +55,8 @@ export default function CardItem({
   card: Card;
   editing: boolean;
   colW: number;
+  readOnly?: boolean;
+  dim?: boolean;
   draft?: { title: string; body: string } | null;
   onStartEdit: (id: string) => void;
   onSave: (id: string, patch: Partial<Card>) => void;
@@ -66,7 +70,7 @@ export default function CardItem({
 }) {
   const cat = CATEGORY_MAP[card.category];
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: card.id, disabled: editing || overlay, animateLayoutChanges });
+    useSortable({ id: card.id, disabled: editing || overlay || readOnly, animateLayoutChanges });
 
   // Live span while dragging the resize handle; falls back to persisted span.
   const [resizeSpan, setResizeSpan] = useState<number | null>(null);
@@ -80,7 +84,7 @@ export default function CardItem({
     : {
         transform: CSS.Transform.toString(transform),
         transition,
-        opacity: isDragging ? 0.4 : 1,
+        opacity: isDragging ? 0.4 : dim ? 0.3 : 1,
         width: widthPx,
         zIndex: span > 1 ? 5 : undefined,
       };
@@ -168,10 +172,10 @@ export default function CardItem({
       ref={setNodeRef}
       data-wide={wide}
       style={style}
-      {...attributes}
-      {...listeners}
-      onDoubleClick={() => onStartEdit(card.id)}
-      className={`${base} group cursor-grab active:cursor-grabbing`}
+      {...(readOnly ? {} : attributes)}
+      {...(readOnly ? {} : listeners)}
+      onDoubleClick={readOnly ? undefined : () => onStartEdit(card.id)}
+      className={`${base} group ${readOnly ? "" : "cursor-grab active:cursor-grabbing"}`}
     >
       {isTentative && <DashedBorder color={dashHex} />}
       {draft && (
@@ -220,10 +224,10 @@ export default function CardItem({
             value={card.value ?? 0}
             cat={cat}
             tray={card.tray}
-            overlay={overlay}
+            overlay={overlay || readOnly}
             onClick={() => onCycleValue(card.id)}
           />
-          {!overlay && (
+          {!overlay && !readOnly && (
             <div className="flex flex-col items-end gap-0.5 opacity-0 transition group-hover:opacity-100">
               <IconBtn
                 title={`Status: ${STATUS_LABEL[card.status]} (click to cycle)`}
@@ -238,7 +242,7 @@ export default function CardItem({
           )}
         </div>
       </div>
-      {!overlay && !card.tray && (
+      {!overlay && !readOnly && !card.tray && (
         <div
           title="Drag to resize (half ↔ full month)"
           onPointerDown={startResize}
