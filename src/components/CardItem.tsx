@@ -224,6 +224,14 @@ export default function CardItem({
           </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-0.5">
+          {/* Value badge — always first, top-right. Click to cycle 0→1→2→3. */}
+          <ValueBadge
+            value={card.value ?? 0}
+            cat={cat}
+            tray={card.tray}
+            overlay={overlay || readOnly}
+            onClick={() => onCycleValue(card.id)}
+          />
           {/* Comment thread — available to editors and view-only guests alike.
               A filled badge with the count when a thread exists; otherwise a
               ghost bubble that appears on hover to start one. */}
@@ -233,14 +241,6 @@ export default function CardItem({
               onOpen={(rect) => onOpenComments(card.id, rect)}
             />
           )}
-          {/* Value badge — always visible, click to cycle 0→1→2→3. */}
-          <ValueBadge
-            value={card.value ?? 0}
-            cat={cat}
-            tray={card.tray}
-            overlay={overlay || readOnly}
-            onClick={() => onCycleValue(card.id)}
-          />
           {!overlay && !readOnly && (
             <div className="flex flex-col items-end gap-0.5 opacity-0 transition group-hover:opacity-100">
               <IconBtn

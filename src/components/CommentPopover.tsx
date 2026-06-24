@@ -135,7 +135,7 @@ export default function CommentPopover({
                   <button
                     title="Delete comment"
                     onClick={() => onDeleteComment(c.id)}
-                    className="ml-auto shrink-0 rounded px-1 text-[11px] text-slate-300 opacity-0 transition hover:text-red-500 group-hover/c:opacity-100"
+                    className="ml-auto flex h-5 w-6 shrink-0 items-center justify-center rounded text-[11px] text-slate-300 opacity-0 transition hover:text-red-500 group-hover/c:opacity-100"
                   >
                     ✕
                   </button>
@@ -149,10 +149,11 @@ export default function CommentPopover({
         ))}
       </div>
 
-      {/* Reply */}
-      <div className="flex items-center gap-2 border-t border-slate-100 px-3 py-2.5">
+      {/* Reply — avatar, field, and send button share the same px-4 gutter and
+          are vertically centered against the input. */}
+      <div className="flex items-center gap-2.5 border-t border-slate-100 px-4 py-2.5">
         <Avatar name={me.name} color={me.color} />
-        <div className="relative flex-1">
+        <div className="relative flex flex-1 items-center">
           <textarea
             autoFocus
             rows={1}
@@ -165,13 +166,13 @@ export default function CommentPopover({
               }
             }}
             placeholder="Reply"
-            className="max-h-24 w-full resize-none rounded-full bg-slate-100 py-1.5 pl-3 pr-9 text-[13px] outline-none placeholder:text-slate-400 focus:bg-slate-50 focus:ring-1 focus:ring-slate-300"
+            className="block max-h-24 min-h-[36px] w-full resize-none rounded-2xl bg-slate-100 py-2 pl-3.5 pr-10 text-[13px] leading-tight outline-none placeholder:text-slate-400 focus:bg-slate-50 focus:ring-1 focus:ring-slate-300"
           />
           <button
             title="Send"
             onClick={send}
             disabled={!reply.trim()}
-            className="absolute right-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full bg-slate-700 text-xs text-white transition disabled:bg-slate-300"
+            className="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full bg-slate-700 text-xs text-white transition disabled:bg-slate-300"
           >
             ↑
           </button>
