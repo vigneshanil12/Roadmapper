@@ -41,6 +41,11 @@ export function getIdentity(): Identity {
   return { id, name, color: colorFor(id) };
 }
 
+// Role hint from the rm_role cookie (UI only; writes are gated server-side).
+export function getRole(): "editor" | "guest" {
+  return readCookie("rm_role") === "editor" ? "editor" : "guest";
+}
+
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";
