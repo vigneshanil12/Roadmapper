@@ -15,6 +15,8 @@ export default function Tray({
   cardsById,
   open,
   onToggle,
+  readOnly = false,
+  matchIds = null,
   editingId,
   drafts,
   onAdd,
@@ -30,6 +32,8 @@ export default function Tray({
   cardsById: Record<string, Card>;
   open: boolean;
   onToggle: () => void;
+  readOnly?: boolean;
+  matchIds?: Set<string> | null;
   editingId: string | null;
   drafts: Record<string, { title: string; body: string }>;
   onAdd: (cellId: string) => void;
@@ -61,12 +65,14 @@ export default function Tray({
         <span className="rounded-full bg-slate-200 px-1.5 text-[11px] text-slate-600">
           {cardIds.length}
         </span>
-        <button
-          onClick={() => onAdd(TRAY_ID)}
-          className="rounded px-1.5 py-0.5 text-[11px] text-slate-500 hover:bg-black/5 hover:text-slate-700"
-        >
-          + add
-        </button>
+        {!readOnly && (
+          <button
+            onClick={() => onAdd(TRAY_ID)}
+            className="rounded px-1.5 py-0.5 text-[11px] text-slate-500 hover:bg-black/5 hover:text-slate-700"
+          >
+            + add
+          </button>
+        )}
         <span className="ml-auto text-[11px] text-slate-400">
           Staging — drag a card here to park it, or into a month
         </span>
@@ -83,6 +89,8 @@ export default function Tray({
                     card={card}
                     editing={editingId === id}
                     colW={0}
+                    readOnly={readOnly}
+                    dim={!!matchIds && !matchIds.has(id)}
                     draft={drafts[id] ?? null}
                     onStartEdit={onStartEdit}
                     onSave={onSave}

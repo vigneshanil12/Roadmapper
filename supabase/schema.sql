@@ -37,3 +37,34 @@ alter table public.cards enable row level security;
 -- service_role bypasses RLS but still needs table-level privileges. Without
 -- this grant, inserts/selects fail with "permission denied for table cards".
 grant all privileges on table public.cards to service_role;
+
+-- Auto-bump updated_at on every UPDATE. The API also sets it explicitly, but the
+-- trigger guarantees it even for writes that don't, and is required for a
+-- reliable ?since=<timestamp> delta sync once the board scales.
+create or replace function public.set_updated_at()
+returns trigger as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists cards_set_updated_at on public.cards;
+create trigger cards_set_updated_at
+  before update on public.cards
+  for each row execute function public.set_updated_at();
+
+-- Live presence. Each browser session upserts a heartbeat row; the board lists
+-- rows seen in the last ~15s as the "who's here" avatars. Ephemeral — safe to
+-- truncate anytime.
+create table if not exists public.presence (
+  id text primary key,                       -- client-generated session id
+  name text not null,
+  color text not null,                       -- hex avatar color
+  last_seen timestamptz not null default now()
+);
+
+create index if not exists presence_last_seen_idx on public.presence (last_seen);
+
+alter table public.presence enable row level security;
+grant all privileges on table public.presence to service_role;
