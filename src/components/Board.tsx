@@ -294,6 +294,9 @@ export default function Board() {
       .then((r) => r.json())
       .then(({ cards }: { cards: Card[] }) => {
         if (!alive) return;
+        // A transient API error returns no array; bail rather than crash the
+        // board on `for (const c of cards)`.
+        if (!Array.isArray(cards)) return;
         const byId: Record<string, Card> = {};
         const map: Record<string, string[]> = { [TRAY_ID]: [] };
         for (const k of allCellIds) map[k] = [];
@@ -335,6 +338,9 @@ export default function Board() {
         .then(({ cards }: { cards: Card[] }) => {
           // Re-check: user may have started dragging/editing during the fetch.
           if (activeId || editingId) return;
+          // A transient API error returns no array; skip this poll cycle rather
+          // than crash on the iteration below.
+          if (!Array.isArray(cards)) return;
           const localDrafts = draftsRef.current;
           const pending = pendingRef.current;
           const byId: Record<string, Card> = {};
@@ -731,26 +737,39 @@ export default function Board() {
 
   function handleDragOver(e: DragOverEvent) {
     const { active, over } = e;
-    const overC = over ? findContainer(String(over.id)) : undefined;
     // Expand the tray while the card is over it; compress when it leaves.
-    setTrayHover(overC === TRAY_ID);
+    // (Visual only — a lagged ref read here is harmless.)
+    setTrayHover(
+      (over ? findContainer(String(over.id)) : undefined) === TRAY_ID
+    );
     if (!over) return;
-    const activeC = findContainer(String(active.id));
-    if (!activeC || !overC || activeC === overC) return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
 
+    // Derive both containers from `prev`, not from the ref. onDragOver fires
+    // faster than React commits, so itemsRef.current can lag behind queued
+    // setItems updates; reading the stale ref here let the card get inserted
+    // into the over-container twice (once per queued update), duplicating its
+    // id across two SortableContexts and crashing dnd-kit.
     setItems((prev) => {
-      const activeItems = prev[activeC];
+      const findIn = (id: string) =>
+        id in prev ? id : Object.keys(prev).find((k) => prev[k].includes(id));
+      const activeC = findIn(activeId);
+      const overC = findIn(overId);
+      if (!activeC || !overC || activeC === overC) return prev;
       const overItems = prev[overC];
-      const overIsContainer = String(over.id) in prev;
+      // A prior queued update already moved it — don't insert a second copy.
+      if (overItems.includes(activeId)) return prev;
+      const overIsContainer = overId in prev;
       const newIndex = overIsContainer
         ? overItems.length
-        : Math.max(0, overItems.indexOf(String(over.id)));
+        : Math.max(0, overItems.indexOf(overId));
       return {
         ...prev,
-        [activeC]: activeItems.filter((id) => id !== String(active.id)),
+        [activeC]: prev[activeC].filter((id) => id !== activeId),
         [overC]: [
           ...overItems.slice(0, newIndex),
-          String(active.id),
+          activeId,
           ...overItems.slice(newIndex),
         ],
       };
