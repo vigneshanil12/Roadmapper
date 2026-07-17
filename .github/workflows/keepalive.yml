@@ -1,0 +1,20 @@
+name: supabase-keepalive
+
+# Pings the app's /api/health route on a schedule so the free-tier Supabase
+# project keeps registering activity and does not auto-pause (7 idle days).
+on:
+  schedule:
+    - cron: "0 6 * * *" # daily at 06:00 UTC
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit health endpoint
+        run: |
+          code=$(curl -sS -o /tmp/body -w "%{http_code}" \
+            https://roadmapper-orpin.vercel.app/api/health)
+          echo "HTTP $code"
+          cat /tmp/body
+          test "$code" = "200"
