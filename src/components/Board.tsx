@@ -1048,7 +1048,7 @@ export default function Board() {
           )}
           <button
             onClick={() => setAssistantOpen((o) => !o)}
-            title="Ask the planning assistant"
+            title="Ask the PM & QA assistant"
             className={`rounded border px-2 py-1 ${
               assistantOpen
                 ? "border-slate-400 bg-slate-100 text-slate-800"
