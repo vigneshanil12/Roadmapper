@@ -94,7 +94,9 @@ export async function POST(req: NextRequest) {
       JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents,
-        generationConfig: { temperature: 0.5, maxOutputTokens: 2048 },
+        // Thinking tokens draw on the same budget as the visible answer, so
+        // 2048 left long assessments truncated mid-sentence.
+        generationConfig: { temperature: 0.5, maxOutputTokens: 8192 },
       })
     );
   } catch (e) {
@@ -115,13 +117,17 @@ export async function POST(req: NextRequest) {
   }
 
   const data = await resp.json();
-  const answer: string =
-    data?.candidates?.[0]?.content?.parts
-      ?.map((p: { text?: string }) => p.text ?? "")
-      .join("") ?? "";
+  const candidate = data?.candidates?.[0];
+  let answer: string =
+    candidate?.content?.parts?.map((p: { text?: string }) => p.text ?? "").join("") ?? "";
   if (!answer.trim()) {
-    const reason = data?.candidates?.[0]?.finishReason || "no content";
+    const reason = candidate?.finishReason || "no content";
     return NextResponse.json({ error: `No answer (${reason})` }, { status: 502 });
+  }
+
+  // A partial answer used to look like a UI clip — say so instead.
+  if (candidate?.finishReason === "MAX_TOKENS") {
+    answer = answer.trimEnd() + "\n\n**(Answer cut short — ask a narrower question for the rest.)**";
   }
 
   return NextResponse.json({ answer });
