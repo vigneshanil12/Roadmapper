@@ -1,5 +1,10 @@
 import Board from "@/components/Board";
+import ErrorBoundary from "@/components/ErrorBoundary";
 
 export default function Home() {
-  return <Board />;
+  return (
+    <ErrorBoundary>
+      <Board />
+    </ErrorBoundary>
+  );
 }

@@ -101,3 +101,26 @@ insert into public.settings (id) values (1) on conflict (id) do nothing;
 
 alter table public.settings enable row level security;
 grant all privileges on table public.settings to service_role;
+
+-- Client crash reports. A render-time throw in the board unmounts the tree into
+-- an error page and the stack is lost on reload; the client posts it here first
+-- (see src/lib/crash.ts) with the breadcrumb trail leading up to it.
+create table if not exists public.client_errors (
+  id uuid primary key default gen_random_uuid(),
+  message text not null,
+  stack text,
+  component_stack text,
+  breadcrumbs jsonb not null default '[]'::jsonb,  -- last ~30 user/app actions
+  url text,
+  user_agent text,
+  user_name text,
+  role text,                                       -- editor | guest | unknown
+  session_id text,                                 -- rm_session_id, ties to presence
+  created_at timestamptz not null default now()
+);
+
+create index if not exists client_errors_created_idx
+  on public.client_errors (created_at desc);
+
+alter table public.client_errors enable row level security;
+grant all privileges on table public.client_errors to service_role;

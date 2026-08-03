@@ -59,3 +59,23 @@ To change the password later: update `APP_PASSWORD` in Vercel env vars → redep
 - **Edit**: double-click a card, or hover → ✎.
 - **Status**: hover → ○ button cycles normal → tentative (dashed) → done (strikethrough).
 - **Delete**: hover → ✕.
+
+## Crash reports
+
+Client-side crashes are captured and stored, not just logged to the console:
+
+- `src/lib/crash.ts` keeps a rolling trail of the last ~30 actions (drag start/end,
+  poll applies, card add/delete, undo) and POSTs a crash to `/api/client-error`
+  with the message, stack, React component stack, and that trail.
+- `src/components/ErrorBoundary.tsx` wraps the board and catches render throws;
+  `src/app/global-error.tsx` is the backstop; `window.onerror` /
+  `unhandledrejection` cover async throws that no boundary sees.
+- Rows land in the `client_errors` table. Read the recent ones as an editor:
+
+  ```
+  curl -s --cookie "rm_auth=$APP_SESSION_SECRET" \
+    https://<your-app>/api/client-error?limit=10 | jq
+  ```
+
+Run `npm test` for the drag container-math regression tests (`src/lib/drag.ts`),
+which pin the invariants behind two past drag crashes.

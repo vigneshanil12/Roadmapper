@@ -1,15 +1,74 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 type Msg = { role: "user" | "assistant"; text: string };
 
 const SUGGESTIONS = [
   "Does next month look overloaded?",
   "What should we prioritise right now?",
+  "Where are the quality risks?",
   "What's missing from the roadmap?",
   "Give me a candid product outlook.",
 ];
+
+// Inline markdown: **bold** and `code`. The model is told to stick to this
+// subset, so a tiny splitter beats a markdown dependency.
+function renderInline(s: string): ReactNode[] {
+  return s.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, i) => {
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+      return <strong key={i}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
+      return (
+        <code key={i} className="rounded bg-slate-200/70 px-1 text-[12px]">
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    return part;
+  });
+}
+
+// Render an assistant answer: bullets, numbered lists, headings-as-bold,
+// paragraphs. Raw markdown asterisks otherwise show verbatim in the bubble.
+function AssistantText({ text }: { text: string }) {
+  const lines = text.replace(/\r/g, "").split("\n");
+  return (
+    <div className="space-y-1">
+      {lines.map((line, i) => {
+        const bullet = line.match(/^\s*[-*•]\s+(.*)$/);
+        if (bullet) {
+          return (
+            <div key={i} className="flex gap-1.5 pl-1">
+              <span className="select-none text-slate-400">•</span>
+              <span>{renderInline(bullet[1])}</span>
+            </div>
+          );
+        }
+        const num = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
+        if (num) {
+          return (
+            <div key={i} className="flex gap-1.5 pl-1">
+              <span className="select-none text-slate-400">{num[1]}.</span>
+              <span>{renderInline(num[2])}</span>
+            </div>
+          );
+        }
+        const heading = line.match(/^\s*#{1,4}\s+(.*)$/);
+        if (heading) {
+          return (
+            <div key={i} className="font-semibold">
+              {renderInline(heading[1])}
+            </div>
+          );
+        }
+        if (!line.trim()) return <div key={i} className="h-1" />;
+        return <div key={i}>{renderInline(line)}</div>;
+      })}
+    </div>
+  );
+}
 
 // Right-docked planning assistant. Read-only: it answers questions about the
 // roadmap, it never edits it. Editors can also set the shared "product context"
@@ -50,19 +109,14 @@ export default function AssistantPanel({
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, busy]);
 
-  async function ask(text: string) {
-    const q = text.trim();
-    if (!q || busy) return;
-    const next: Msg[] = [...messages, { role: "user", text: q }];
-    setMessages(next);
-    setInput("");
+  async function send(thread: Msg[]) {
     setErr(null);
     setBusy(true);
     try {
       const r = await fetch("/api/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next }),
+        body: JSON.stringify({ messages: thread }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || "Request failed");
@@ -72,6 +126,21 @@ export default function AssistantPanel({
     } finally {
       setBusy(false);
     }
+  }
+
+  function ask(text: string) {
+    const q = text.trim();
+    if (!q || busy) return;
+    const next: Msg[] = [...messages, { role: "user", text: q }];
+    setMessages(next);
+    setInput("");
+    void send(next);
+  }
+
+  // Re-send the thread after a failure; the user's question is already in it.
+  function retry() {
+    if (busy || !messages.length || messages[messages.length - 1].role !== "user") return;
+    void send(messages);
   }
 
   async function saveCtx() {
@@ -102,9 +171,21 @@ export default function AssistantPanel({
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
         <div className="flex items-center gap-2">
           <span className="text-base">✨</span>
-          <span className="text-sm font-semibold text-slate-800">Planning assistant</span>
+          <span className="text-sm font-semibold text-slate-800">PM & QA assistant</span>
         </div>
         <div className="flex items-center gap-1 text-slate-500">
+          {messages.length > 0 && (
+            <button
+              title="Clear conversation"
+              onClick={() => {
+                setMessages([]);
+                setErr(null);
+              }}
+              className="rounded px-2 py-1 text-xs hover:bg-slate-100"
+            >
+              Clear
+            </button>
+          )}
           {isEditor && (
             <button
               title="Edit product context"
@@ -163,8 +244,9 @@ export default function AssistantPanel({
         {messages.length === 0 && (
           <div className="space-y-3">
             <p className="text-[13px] leading-snug text-slate-500">
-              Ask about your roadmap — load, priorities, gaps, feasibility, what to
-              add. I read the live board but can&apos;t change it.
+              Ask about your roadmap — load, priorities, gaps, quality risks, what
+              to add. I read the live board and card comments but can&apos;t change
+              anything.
             </p>
             <div className="flex flex-col gap-1.5">
               {SUGGESTIONS.map((s) => (
@@ -188,11 +270,11 @@ export default function AssistantPanel({
             <div
               className={
                 m.role === "user"
-                  ? "max-w-[85%] rounded-2xl rounded-br-sm bg-slate-800 px-3.5 py-2 text-[13px] leading-snug text-white"
-                  : "max-w-[92%] whitespace-pre-wrap rounded-2xl rounded-bl-sm bg-slate-100 px-3.5 py-2 text-[13px] leading-relaxed text-slate-800"
+                  ? "max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-slate-800 px-3.5 py-2 text-[13px] leading-snug text-white"
+                  : "max-w-[92%] rounded-2xl rounded-bl-sm bg-slate-100 px-3.5 py-2 text-[13px] leading-relaxed text-slate-800"
               }
             >
-              {m.text}
+              {m.role === "user" ? m.text : <AssistantText text={m.text} />}
             </div>
           </div>
         ))}
@@ -206,7 +288,19 @@ export default function AssistantPanel({
         )}
 
         {err && (
-          <p className="rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-600">{err}</p>
+          <div className="flex items-center justify-between gap-2 rounded-lg bg-red-50 px-3 py-2">
+            <p className="text-[12px] text-red-600">{err}</p>
+            {!busy &&
+              messages.length > 0 &&
+              messages[messages.length - 1].role === "user" && (
+                <button
+                  onClick={retry}
+                  className="shrink-0 rounded border border-red-200 px-2 py-0.5 text-[12px] font-medium text-red-600 hover:bg-red-100"
+                >
+                  Retry
+                </button>
+              )}
+          </div>
         )}
       </div>
 

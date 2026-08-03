@@ -15,12 +15,13 @@ import {
   type DragOverEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { arrayMove } from "@dnd-kit/sortable";
+import { findContainerIn, moveBetween, reorderWithin } from "@/lib/drag";
 import { CATEGORIES } from "@/lib/categories";
 import { buildMonths, currentMonthIndex } from "@/lib/time";
 import { cellKey, TRAY_ID, type Card, type CardStatus, type CategoryId, type Comment } from "@/lib/types";
 import { getIdentity, getRole, initials, type Identity } from "@/lib/presence";
 import { getBrowserClient } from "@/lib/supabase-browser";
+import { recordAction, reportCrash } from "@/lib/crash";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import Cell from "./Cell";
 import CardItem from "./CardItem";
@@ -267,6 +268,21 @@ export default function Board() {
   const cardsRef = useRef(cardsById);
   itemsRef.current = items;
   cardsRef.current = cardsById;
+  // Live mirrors of the drag/edit flags. An in-flight poll's `.then` closes over
+  // the value of activeId/editingId from when the fetch was *started*, so a drag
+  // that begins mid-flight is invisible to a closure-based guard; these refs are
+  // read at resolve time and see the current value.
+  const activeIdRef = useRef(activeId);
+  const editingIdRef = useRef(editingId);
+  activeIdRef.current = activeId;
+  editingIdRef.current = editingId;
+  // Aborts the in-flight poll when a drag starts, so its response can never land
+  // on top of the drag at all.
+  const pollAbortRef = useRef<AbortController | null>(null);
+  // Container the dragged card was last moved into by handleDragOver. Recorded
+  // there (where it is derived from the authoritative `prev`) so handleDragEnd
+  // can tell a tray drop from a grid drop without re-reading a lagging ref.
+  const lastOverContainerRef = useRef<string | null>(null);
 
   // Undo history: snapshots of the full board, newest last. Capped so Ctrl+Z
   // walks back the last ~20 changes.
@@ -312,7 +328,9 @@ export default function Board() {
         setCardsById(byId);
         setItems(map);
         setLoaded(true);
-      });
+        recordAction("load:cards", `${cards.length} cards`);
+      })
+      .catch((e) => reportCrash(e));
     return () => {
       alive = false;
     };
@@ -332,12 +350,18 @@ export default function Board() {
   useEffect(() => {
     if (!loaded) return;
     const id = setInterval(() => {
-      if (activeId || editingId) return;
-      fetch("/api/cards")
+      if (activeIdRef.current || editingIdRef.current) return;
+      const ctrl = new AbortController();
+      pollAbortRef.current = ctrl;
+      fetch("/api/cards", { signal: ctrl.signal })
         .then((r) => r.json())
         .then(({ cards }: { cards: Card[] }) => {
-          // Re-check: user may have started dragging/editing during the fetch.
-          if (activeId || editingId) return;
+          // Re-check via refs, not the closure: the user may have started
+          // dragging/editing after this fetch went out, in which case the
+          // captured activeId/editingId are still null and would let a stale
+          // snapshot replace `items`/`cardsById` mid-drag — yanking the dragged
+          // card (or unmounting it) under dnd-kit.
+          if (activeIdRef.current || editingIdRef.current) return;
           // A transient API error returns no array; skip this poll cycle rather
           // than crash on the iteration below.
           if (!Array.isArray(cards)) return;
@@ -369,13 +393,22 @@ export default function Board() {
           }
           for (const k in map)
             map[k].sort((a, b) => byId[a].position - byId[b].position);
+          recordAction("poll:apply", `${cards.length} cards`);
           setCardsById(byId);
           setItems(map);
         })
-        .catch(() => {});
+        // An aborted poll (drag started) is expected; anything else thrown in
+        // the handler above used to be swallowed here — report it instead.
+        .catch((e) => {
+          if (e?.name !== "AbortError") reportCrash(e);
+        });
     }, 3000);
-    return () => clearInterval(id);
-  }, [loaded, activeId, editingId, allCellIds]);
+    return () => {
+      clearInterval(id);
+      pollAbortRef.current?.abort();
+      pollAbortRef.current = null;
+    };
+  }, [loaded, allCellIds]);
 
   // Presence: announce this session every 5s and pull the active roster. On tab
   // close, fire a best-effort leave beacon so the avatar drops immediately
@@ -582,6 +615,7 @@ export default function Board() {
       });
     }
     if (updates.length) {
+      recordAction("persist:layout", `${updates.length} cards`);
       setCardsById(next);
       fetch("/api/cards/batch", {
         method: "POST",
@@ -642,6 +676,7 @@ export default function Board() {
   function undo() {
     const snap = historyRef.current.pop();
     if (!snap) return;
+    recordAction("undo");
     redoRef.current.push(snapshot());
     applySnapshot(snap);
   }
@@ -649,6 +684,7 @@ export default function Board() {
   function redo() {
     const snap = redoRef.current.pop();
     if (!snap) return;
+    recordAction("redo");
     historyRef.current.push(snapshot());
     applySnapshot(snap);
   }
@@ -703,11 +739,10 @@ export default function Board() {
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
   );
 
+  // Last committed containers. Only safe for visual/uncritical reads (tray hover,
+  // breadcrumbs) — anything that mutates state derives containers from `prev`.
   function findContainer(id: string): string | undefined {
-    if (id in itemsRef.current) return id;
-    return Object.keys(itemsRef.current).find((k) =>
-      itemsRef.current[k].includes(id)
-    );
+    return findContainerIn(itemsRef.current, id);
   }
 
   // Pointer-first collision detection. The dense month grid keeps corner-based
@@ -732,7 +767,12 @@ export default function Board() {
   function handleDragStart(e: DragStartEvent) {
     pushHistory();
     setTrayHover(false);
+    // Drop any poll already in flight: its snapshot predates this drag, and
+    // applying it mid-drag would move the card out from under dnd-kit.
+    pollAbortRef.current?.abort();
+    pollAbortRef.current = null;
     setActiveId(String(e.active.id));
+    recordAction("drag:start", `${e.active.id} from ${findContainer(String(e.active.id))}`);
   }
 
   function handleDragOver(e: DragOverEvent) {
@@ -752,51 +792,37 @@ export default function Board() {
     // into the over-container twice (once per queued update), duplicating its
     // id across two SortableContexts and crashing dnd-kit.
     setItems((prev) => {
-      const findIn = (id: string) =>
-        id in prev ? id : Object.keys(prev).find((k) => prev[k].includes(id));
-      const activeC = findIn(activeId);
-      const overC = findIn(overId);
-      if (!activeC || !overC || activeC === overC) return prev;
-      const overItems = prev[overC];
-      // A prior queued update already moved it — don't insert a second copy.
-      if (overItems.includes(activeId)) return prev;
-      const overIsContainer = overId in prev;
-      const newIndex = overIsContainer
-        ? overItems.length
-        : Math.max(0, overItems.indexOf(overId));
-      return {
-        ...prev,
-        [activeC]: prev[activeC].filter((id) => id !== activeId),
-        [overC]: [
-          ...overItems.slice(0, newIndex),
-          activeId,
-          ...overItems.slice(newIndex),
-        ],
-      };
+      // Idempotent note-keeping for handleDragEnd — not state, just the last
+      // container this card was over.
+      const overC = findContainerIn(prev, overId);
+      if (overC) lastOverContainerRef.current = overC;
+      return moveBetween(prev, activeId, overId);
     });
   }
 
   function handleDragEnd(e: DragEndEvent) {
     const { active, over } = e;
-    const activeC = findContainer(String(active.id));
-    if (over && activeC) {
-      const overC = findContainer(String(over.id));
-      if (activeC === overC && !(String(over.id) in itemsRef.current)) {
-        const arr = itemsRef.current[activeC];
-        const oldIndex = arr.indexOf(String(active.id));
-        const newIndex = arr.indexOf(String(over.id));
-        if (oldIndex !== newIndex && newIndex >= 0) {
-          setItems((prev) => ({
-            ...prev,
-            [activeC]: arrayMove(prev[activeC], oldIndex, newIndex),
-          }));
-        }
-      }
+    const activeId = String(active.id);
+    const overId = over ? String(over.id) : null;
+
+    if (overId) {
+      // Same-container reorder. Every id and index is derived from `prev`: the
+      // last handleDragOver update may not have committed yet when pointerup
+      // fires, so itemsRef.current can still show the pre-drag containers —
+      // indices taken from it then get applied to a different array, and
+      // arrayMove happily splices the wrong (or an undefined) element in.
+      setItems((prev) => reorderWithin(prev, activeId, overId));
     }
+
     // Card parked via drag — auto-expand so the user sees where it landed.
-    if (activeC && itemsRef.current[TRAY_ID]?.includes(String(active.id))) {
-      setTrayOpen(true);
-    }
+    const landedInTray =
+      overId === TRAY_ID ||
+      lastOverContainerRef.current === TRAY_ID ||
+      (itemsRef.current[TRAY_ID]?.includes(activeId) ?? false);
+    if (landedInTray) setTrayOpen(true);
+
+    recordAction("drag:end", `${activeId} -> ${overId ?? "nowhere"}`);
+    lastOverContainerRef.current = null;
     setActiveId(null);
     setTrayHover(false);
   }
@@ -815,6 +841,7 @@ export default function Board() {
   // id; the POST runs in the background using that same id.
   function addCard(cellId: string) {
     pushHistory();
+    recordAction("card:add", cellId);
     const isTray = cellId === TRAY_ID;
     // Tray cards have no real column yet; default to the current half-month so
     // the stored col_* are valid until the card is dropped into a cell.
@@ -902,6 +929,7 @@ export default function Board() {
 
   function deleteCard(id: string) {
     pushHistory();
+    recordAction("card:delete", id);
     clearDraft(id);
     delete pendingRef.current[id];
     setEditingId((e) => (e === id ? null : e));
@@ -1048,7 +1076,7 @@ export default function Board() {
           )}
           <button
             onClick={() => setAssistantOpen((o) => !o)}
-            title="Ask the planning assistant"
+            title="Ask the PM & QA assistant"
             className={`rounded border px-2 py-1 ${
               assistantOpen
                 ? "border-slate-400 bg-slate-100 text-slate-800"
