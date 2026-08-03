@@ -1206,6 +1206,7 @@ export default function Board() {
                 cardsById={cardsById}
                 overflow={overflow}
                 onOverflow={handleOverflow}
+                dragging={!!activeId}
                 readOnly={readOnly}
                 matchIds={matchIds}
                 editingId={editingId}
@@ -1351,6 +1352,7 @@ function RowFragment({
   cardsById,
   overflow,
   onOverflow,
+  dragging,
   readOnly,
   matchIds,
   editingId,
@@ -1379,6 +1381,7 @@ function RowFragment({
   cardsById: Record<string, Card>;
   overflow: Record<string, number>;
   onOverflow: (cellId: string, bottomPx: number) => void;
+  dragging: boolean;
   readOnly: boolean;
   matchIds: Set<string> | null;
   editingId: string | null;
@@ -1435,6 +1438,7 @@ function RowFragment({
             edgeClass={edgeClass}
             reserveTop={reserveTop}
             onOverflow={onOverflow}
+            dragging={dragging}
             readOnly={readOnly}
             matchIds={matchIds}
             editingId={editingId}
