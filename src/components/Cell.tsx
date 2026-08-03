@@ -15,6 +15,7 @@ export default function Cell({
   edgeClass = "",
   reserveTop = 0,
   onOverflow,
+  dragging = false,
   readOnly = false,
   matchIds = null,
   editingId,
@@ -43,6 +44,9 @@ export default function Cell({
   // Reports this cell's own wide-card overflow (bottom edge px) up to the board,
   // which feeds it to the cell on the right as its reserveTop.
   onOverflow: (cellId: string, bottomPx: number) => void;
+  // True while any card is being dragged. Measuring is frozen for the duration —
+  // see the effect below.
+  dragging?: boolean;
   readOnly?: boolean;
   // When non-null, a filter is active: cards not in the set are dimmed.
   matchIds?: Set<string> | null;
@@ -71,9 +75,17 @@ export default function Cell({
   // lowest bottom edge. Re-runs on size changes (ResizeObserver) and on card
   // add/remove or live span flips (MutationObserver on data-wide), so the right
   // neighbor realigns immediately while a card is being resized.
+  //
+  // Frozen while a drag is in flight. dnd-kit rewrites inline transform styles
+  // on every pointer move and tracks the dragged node's rect (and its parent
+  // cell's rect) with its own observers; measuring here during a drag closed the
+  // loop — mutation -> onOverflow -> board state -> reserveTop/padding change ->
+  // mutation -> dnd-kit re-measures -> ... React aborted it with error #185
+  // ("Maximum update depth exceeded") mid-drag. Layout can't change under a
+  // drag anyway; the effect re-runs and re-measures once `dragging` flips back.
   useEffect(() => {
     const el = elRef.current;
-    if (!el) return;
+    if (!el || dragging) return;
     let raf = 0;
     const measure = () => {
       cancelAnimationFrame(raf);
@@ -83,25 +95,30 @@ export default function Cell({
           const bottom = w.offsetTop + w.offsetHeight;
           if (bottom > maxBottom) maxBottom = bottom;
         });
-        onOverflow(cellId, maxBottom);
+        // Round: offsetTop/offsetHeight are integers today, but a fractional
+        // value would never equal the stored one, so every measure would push a
+        // new value and re-render the board forever.
+        onOverflow(cellId, Math.round(maxBottom));
       });
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     const mo = new MutationObserver(measure);
+    // data-wide only: `style` fires on every dnd-kit transform write, and a
+    // span resize flips data-wide anyway (CardItem sets it from the live span).
     mo.observe(el, {
       subtree: true,
       childList: true,
       attributes: true,
-      attributeFilter: ["data-wide", "style"],
+      attributeFilter: ["data-wide"],
     });
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
       mo.disconnect();
     };
-  }, [cellId, onOverflow, cardIds.join("|")]);
+  }, [cellId, onOverflow, dragging, cardIds.join("|")]);
 
   return (
     <div
