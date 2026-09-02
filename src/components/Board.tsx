@@ -15,7 +15,7 @@ import {
   type DragOverEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { findContainerIn, moveBetween, reorderWithin } from "@/lib/drag";
+import { findContainerIn, moveBetween, reorderWithin, resolveGridCollision } from "@/lib/drag";
 import { CATEGORIES } from "@/lib/categories";
 import { buildMonths, currentMonthIndex } from "@/lib/time";
 import { cellKey, TRAY_ID, type Card, type CardStatus, type CategoryId, type Comment } from "@/lib/types";
@@ -761,7 +761,22 @@ export default function Board() {
       return card ? [card] : [onTray];
     }
     const corners = closestCorners(args);
-    return corners.length ? corners : pointer;
+    const candidates = corners.length ? corners : pointer;
+    // Grid: the cell the cursor is inside decides the container. Without this a
+    // span=2 card in Cycle 1 — whose rect overhangs Cycle 2 — outranked the
+    // Cycle 2 cell in closestCorners, so Cycle 2 was unreachable whenever its
+    // left neighbour held a wide card. See resolveGridCollision.
+    const cell = pointer.find((c) => String(c.id).includes("|"));
+    if (cell) {
+      const cellId = String(cell.id);
+      const winner = resolveGridCollision(
+        itemsRef.current,
+        cellId,
+        candidates.map((c) => String(c.id))
+      );
+      return winner === cellId ? [cell] : candidates.filter((c) => String(c.id) === winner);
+    }
+    return candidates;
   }, []);
 
   function handleDragStart(e: DragStartEvent) {

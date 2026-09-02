@@ -8,7 +8,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { moveBetween, reorderWithin, findContainerIn } from "../src/lib/drag.ts";
+import {
+  moveBetween,
+  reorderWithin,
+  findContainerIn,
+  resolveGridCollision,
+} from "../src/lib/drag.ts";
 
 const TRAY = "tray";
 const A = "features|2026|8|0";
@@ -101,4 +106,22 @@ test("findContainerIn: card, container, and unknown ids", () => {
   assert.equal(findContainerIn({ [A]: ["c1"] }, "c1"), A);
   assert.equal(findContainerIn({ [A]: [] }, A), A);
   assert.equal(findContainerIn({ [A]: [] }, "nope"), undefined);
+});
+
+// Grid collision: a span=2 card in the left cell overhangs the right cell, so
+// its droppable rect wins closestCorners inside the right column. The cell the
+// pointer is in must decide the container, or the right cell is unreachable.
+test("resolveGridCollision: wide card from another cell is ignored", () => {
+  assert.equal(resolveGridCollision({ [A]: ["wide"], [B]: [] }, B, ["wide"]), B);
+});
+
+test("resolveGridCollision: card in the pointer's own cell wins (insertion index)", () => {
+  assert.equal(
+    resolveGridCollision({ [A]: ["wide"], [B]: ["x"] }, B, ["wide", "x"]),
+    "x"
+  );
+});
+
+test("resolveGridCollision: empty cell falls back to the cell id", () => {
+  assert.equal(resolveGridCollision({ [A]: ["wide"] }, B, ["wide"]), B);
 });

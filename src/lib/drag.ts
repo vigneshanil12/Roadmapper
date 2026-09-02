@@ -71,3 +71,25 @@ export function reorderWithin(
   if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return prev;
   return { ...prev, [activeC]: arrayMove(arr, oldIndex, newIndex) };
 }
+
+// Collision resolution for the month grid.
+//
+// A span=2 card is *wider than its own cell*: it renders over the column to its
+// right (CardItem sizes it colW*2). dnd-kit registers every sortable card as a
+// droppable at its real rect, so a wide card in Cycle 1 owns a droppable rect
+// sitting inside Cycle 2's space — and closestCorners preferred it over the
+// Cycle 2 cell itself (a full-row rect whose corners are far from the small
+// dragged card). Dropping anywhere in Cycle 2 therefore filed the card back
+// into Cycle 1, with no way to reach Cycle 2 at all.
+//
+// So the cell under the *pointer* wins, and card candidates are only honoured
+// when they actually live in that cell (they carry the insertion index).
+// Falling back to the cell id drops at the end of it.
+export function resolveGridCollision(
+  items: Containers,
+  cellId: string,
+  candidateIds: string[]
+): string {
+  const own = items[cellId] ?? [];
+  return candidateIds.find((id) => own.includes(id)) ?? cellId;
+}
