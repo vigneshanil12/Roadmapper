@@ -126,31 +126,35 @@ export function reserveFor(
 
 // ---- Group move ----------------------------------------------------------
 //
-// Multi-select drag: dnd-kit only moves the card under the pointer. On drop,
-// the rest of the selection ("followers") is shifted by the same row/column
-// delta the dragged card travelled, so the group keeps its shape. The delta is
-// clamped so no follower falls off the grid. Anything involving the parking
-// lot has no geometry, so followers just land in the same container as the
-// dragged card.
+// Multi-select drag. A group drag does not move anything live (dnd-kit only
+// knows about the grabbed card, so live-moving it alone reshuffled cells under
+// the rest of the group). Instead the board previews the landing cells from
+// planGroupMove and applies everything at once on drop with applyGroupMove.
 //
-// Like the rest of this file, `prev` must be the fresh container map from
-// inside a setItems updater — the dragged card's landing cell is read from it.
-export function moveGroup(
-  prev: Containers,
-  activeId: string,
+// Every card shifts by the same row/column delta the grabbed card travelled,
+// so the group keeps its shape; the delta is clamped so no card — grabbed one
+// included — falls off the grid. The parking lot has no geometry: dropping
+// there (or dragging out of it) sends the whole group to the target container.
+
+export type GroupGrid = { cats: string[]; cols: string[]; tray: string };
+
+// Destination container per card id, or null when nothing moves. `ids` lists
+// the grabbed card first. Ids missing from `items` are skipped.
+export function planGroupMove(
+  items: Containers,
+  ids: string[],
   originC: string,
-  followerIds: string[],
-  grid: { cats: string[]; cols: string[]; tray: string }
-): Containers {
-  const targetC = findContainerIn(prev, activeId);
-  if (!targetC || targetC === originC) return prev;
-  const want = new Set(followerIds.filter((id) => id !== activeId));
-  // Followers in board order (container, then stack index) so their relative
-  // stacking survives the move.
-  const followers: Array<{ id: string; from: string }> = [];
-  for (const k of Object.keys(prev))
-    for (const id of prev[k]) if (want.has(id)) followers.push({ id, from: k });
-  if (!followers.length) return prev;
+  targetC: string,
+  grid: GroupGrid
+): Record<string, string> | null {
+  if (originC === targetC) return null;
+  const from: Record<string, string> = {};
+  for (const id of ids) {
+    const c = findContainerIn(items, id);
+    if (c && c !== id) from[id] = c;
+  }
+  const present = Object.keys(from);
+  if (!present.length) return null;
 
   const pos = (cell: string) => {
     const bar = cell.indexOf("|");
@@ -159,44 +163,77 @@ export function moveGroup(
       col: grid.cols.indexOf(cell.slice(bar + 1)),
     };
   };
-  const geometric = originC !== grid.tray && targetC !== grid.tray;
-  let dRow = 0;
-  let dCol = 0;
-  if (geometric) {
-    const a = pos(originC);
-    const b = pos(targetC);
-    if (a.row < 0 || a.col < 0 || b.row < 0 || b.col < 0) return prev;
-    dRow = b.row - a.row;
-    dCol = b.col - a.col;
-    // Clamp so the whole group stays on the grid.
-    for (const f of followers) {
-      if (f.from === grid.tray) continue;
-      const p = pos(f.from);
-      if (p.row < 0 || p.col < 0) continue;
-      dRow = Math.min(Math.max(dRow, -p.row), grid.cats.length - 1 - p.row);
-      dCol = Math.min(Math.max(dCol, -p.col), grid.cols.length - 1 - p.col);
-    }
+  const plan: Record<string, string> = {};
+  if (originC === grid.tray || targetC === grid.tray) {
+    for (const id of present) plan[id] = targetC;
+    return plan;
   }
-  const destOf = (from: string) => {
-    if (!geometric || from === grid.tray) return targetC;
-    const p = pos(from);
-    if (p.row < 0 || p.col < 0) return from;
-    return `${grid.cats[p.row + dRow]}|${grid.cols[p.col + dCol]}`;
-  };
+  const a = pos(originC);
+  const b = pos(targetC);
+  if (a.row < 0 || a.col < 0 || b.row < 0 || b.col < 0) return null;
+  let dRow = b.row - a.row;
+  let dCol = b.col - a.col;
+  for (const id of present) {
+    if (from[id] === grid.tray) continue;
+    const p = pos(from[id]);
+    if (p.row < 0 || p.col < 0) continue;
+    dRow = Math.min(Math.max(dRow, -p.row), grid.cats.length - 1 - p.row);
+    dCol = Math.min(Math.max(dCol, -p.col), grid.cols.length - 1 - p.col);
+  }
+  if (dRow === 0 && dCol === 0) return null;
+  for (const id of present) {
+    const p = from[id] === grid.tray ? null : pos(from[id]);
+    plan[id] =
+      p && p.row >= 0 && p.col >= 0
+        ? `${grid.cats[p.row + dRow]}|${grid.cols[p.col + dCol]}`
+        : // A parked card in a grid move lands with the grabbed card.
+          `${grid.cats[a.row + dRow]}|${grid.cols[a.col + dCol]}`;
+  }
+  return plan;
+}
 
-  const next: Containers = { ...prev };
-  const moved = followers.filter((f) => destOf(f.from) !== f.from);
-  if (!moved.length) return prev;
-  const movedIds = new Set(moved.map((f) => f.id));
-  for (const f of moved) next[f.from] = next[f.from].filter((id) => !movedIds.has(id));
+// Apply a plan from planGroupMove. Cards headed to the grabbed card's cell go
+// in as one block, in their original board order, before `overId` when that is
+// a card already in the cell (else at the end); the rest join the bottom of
+// their new cell, also in board order — so the group never reshuffles itself.
+export function applyGroupMove(
+  prev: Containers,
+  plan: Record<string, string> | null,
+  activeId: string,
+  overId: string | null
+): Containers {
+  if (!plan) return prev;
+  const moving = new Set(Object.keys(plan).filter((id) => findContainerIn(prev, id) !== plan[id]));
+  if (!moving.size) return prev;
+  // Board order (container, then stack index) so relative stacking survives.
+  const ordered: string[] = [];
+  for (const k of Object.keys(prev)) for (const id of prev[k]) if (moving.has(id)) ordered.push(id);
+  const next: Containers = {};
+  for (const k of Object.keys(prev)) next[k] = prev[k].filter((id) => !moving.has(id));
+  const activeDest = plan[activeId];
   const byDest: Record<string, string[]> = {};
-  for (const f of moved) (byDest[destOf(f.from)] ||= []).push(f.id);
+  for (const id of ordered) (byDest[plan[id]] ||= []).push(id);
   for (const dest in byDest) {
     const arr = next[dest] ?? [];
-    // Followers sharing the dragged card's cell sit right below it; elsewhere
-    // they join the bottom of the stack.
-    const at = dest === targetC ? arr.indexOf(activeId) + 1 : arr.length;
+    const at =
+      dest === activeDest && overId && arr.includes(overId) ? arr.indexOf(overId) : arr.length;
     next[dest] = [...arr.slice(0, at), ...byDest[dest], ...arr.slice(at)];
   }
   return next;
+}
+
+// Which grid cell a dragged card targets. The cursor alone is wrong for wide
+// cards (span > 1) and groups: grab a wide card by its right half and the
+// cursor sits a column right of the card's left edge, so it lands a column
+// off from where it visibly is. Anchor on the middle of the card's first
+// column instead; the row still follows the cursor.
+export function anchorPoint(
+  rect: { left: number; top: number; width: number; height: number },
+  pointer: { x: number; y: number } | null,
+  colW: number
+): { x: number; y: number } {
+  return {
+    x: rect.left + Math.min(rect.width, colW) / 2,
+    y: pointer ? pointer.y : rect.top + rect.height / 2,
+  };
 }

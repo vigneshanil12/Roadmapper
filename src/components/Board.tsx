@@ -16,9 +16,11 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import {
+  anchorPoint,
+  applyGroupMove,
   findContainerIn,
   moveBetween,
-  moveGroup,
+  planGroupMove,
   reorderWithin,
   reserveFor,
   resolveGridCollision,
@@ -107,6 +109,9 @@ export default function Board() {
   // Selected cards following the dragged one (rendered as ghosts mid-drag).
   const [following, setFollowing] = useState<Set<string> | null>(null);
   const followersRef = useRef<string[]>([]);
+  // Cells a group drag would land in, ringed on the board while dragging.
+  const [dropCells, setDropCells] = useState<Set<string> | null>(null);
+  const dropKeyRef = useRef("");
   // Followers' on-screen offsets from the dragged card, captured at drag start,
   // so the drag overlay carries the whole group in its original layout.
   const [groupLayout, setGroupLayout] = useState<Array<{ id: string; dx: number; dy: number }>>([]);
@@ -793,11 +798,21 @@ export default function Board() {
     }
     const corners = closestCorners(args);
     const candidates = corners.length ? corners : pointer;
-    // Grid: the cell the cursor is inside decides the container. Without this a
-    // span=2 card in Cycle 1 — whose rect overhangs Cycle 2 — outranked the
-    // Cycle 2 cell in closestCorners, so Cycle 2 was unreachable whenever its
-    // left neighbour held a wide card. See resolveGridCollision.
-    const cell = pointer.find((c) => String(c.id).includes("|"));
+    // Grid: the cell under the dragged card's first column decides the
+    // container (see anchorPoint) — not closestCorners, where a span=2 card in
+    // Cycle 1 whose rect overhangs Cycle 2 outranked the Cycle 2 cell and made
+    // it unreachable (see resolveGridCollision); and not the bare cursor, which
+    // sits a column off when a wide card is grabbed by its right half.
+    let cell = pointer.find((c) => String(c.id).includes("|"));
+    if (args.collisionRect) {
+      const pt = anchorPoint(args.collisionRect, args.pointerCoordinates, COL_W);
+      const hit = args.droppableContainers.find((c) => {
+        if (!String(c.id).includes("|")) return false;
+        const r = args.droppableRects.get(c.id);
+        return !!r && pt.x >= r.left && pt.x < r.right && pt.y >= r.top && pt.y < r.bottom;
+      });
+      if (hit) cell = { id: hit.id, data: { droppableContainer: hit, value: 0 } };
+    }
     if (cell) {
       const cellId = String(cell.id);
       const winner = resolveGridCollision(
@@ -872,6 +887,25 @@ export default function Board() {
     const activeId = String(active.id);
     const overId = String(over.id);
 
+    // Group drag: nothing moves until the drop (moving only the grabbed card
+    // live shuffled cells under the rest of the group). Just preview where
+    // every card will land. Visual only, so the lagging ref is fine here.
+    const origin = dragOriginRef.current;
+    if (followersRef.current.length && origin) {
+      const overC = findContainer(overId);
+      if (overC) lastOverContainerRef.current = overC;
+      const plan = overC
+        ? planGroupMove(itemsRef.current, [activeId, ...followersRef.current], origin, overC, groupGrid)
+        : null;
+      const cells = plan ? [...new Set(Object.values(plan))].filter((c) => c !== TRAY_ID) : [];
+      const key = cells.sort().join(",");
+      if (key !== dropKeyRef.current) {
+        dropKeyRef.current = key;
+        setDropCells(cells.length ? new Set(cells) : null);
+      }
+      return;
+    }
+
     // Derive both containers from `prev`, not from the ref. onDragOver fires
     // faster than React commits, so itemsRef.current can lag behind queued
     // setItems updates; reading the stale ref here let the card get inserted
@@ -891,21 +925,24 @@ export default function Board() {
     const activeId = String(active.id);
     const overId = over ? String(over.id) : null;
 
-    if (overId) {
+    const followers = followersRef.current;
+    const origin = dragOriginRef.current;
+    if (followers.length && origin) {
+      // Group drop: move every card at once, all derived from `prev`.
+      if (overId)
+        setItems((prev) => {
+          const targetC = findContainerIn(prev, overId);
+          if (!targetC) return prev;
+          const plan = planGroupMove(prev, [activeId, ...followers], origin, targetC, groupGrid);
+          return applyGroupMove(prev, plan, activeId, overId);
+        });
+    } else if (overId) {
       // Same-container reorder. Every id and index is derived from `prev`: the
       // last handleDragOver update may not have committed yet when pointerup
       // fires, so itemsRef.current can still show the pre-drag containers —
       // indices taken from it then get applied to a different array, and
       // arrayMove happily splices the wrong (or an undefined) element in.
       setItems((prev) => reorderWithin(prev, activeId, overId));
-    }
-
-    // Selected cards follow by the same row/column delta. Queued after the
-    // reorder so `prev` already has the dragged card where it finally landed.
-    const followers = followersRef.current;
-    const origin = dragOriginRef.current;
-    if (followers.length && origin) {
-      setItems((prev) => moveGroup(prev, activeId, origin, followers, groupGrid));
     }
 
     // Card parked via drag — auto-expand so the user sees where it landed.
@@ -923,8 +960,8 @@ export default function Board() {
     endDrag();
   }
 
-  // Esc mid-drag. The card stays wherever handleDragOver last put it (as
-  // before); the group just doesn't follow.
+  // Esc mid-drag. A single card stays wherever handleDragOver last put it (as
+  // before); a group drag hasn't moved anything yet, so it simply stays put.
   function handleDragCancel() {
     recordAction("drag:cancel");
     endDrag();
@@ -937,6 +974,8 @@ export default function Board() {
     lastDragEndRef.current = Date.now();
     setFollowing(null);
     setGroupLayout([]);
+    dropKeyRef.current = "";
+    setDropCells(null);
     setActiveId(null);
     setTrayHover(false);
   }
@@ -1417,6 +1456,7 @@ export default function Board() {
                 labelCollapsed={labelCollapsed}
                 selected={selected}
                 followingIds={following}
+                dropCells={dropCells}
                 onSelect={selectCard}
               />
             ))}
@@ -1604,6 +1644,7 @@ function RowFragment({
   labelCollapsed,
   selected,
   followingIds,
+  dropCells,
   onSelect,
 }: {
   catId: CategoryId;
@@ -1636,6 +1677,7 @@ function RowFragment({
   labelCollapsed: boolean;
   selected: Set<string>;
   followingIds: Set<string> | null;
+  dropCells: Set<string> | null;
   onSelect: (id: string, additive: boolean) => void;
 }) {
   const rowCells = cols.map((c) => cellKey(catId, c.year, c.month, c.half));
@@ -1694,6 +1736,7 @@ function RowFragment({
             onOpenComments={onOpenComments}
             selected={selected}
             followingIds={followingIds}
+            dropTarget={!!dropCells?.has(id)}
             onSelect={onSelect}
           />
         );

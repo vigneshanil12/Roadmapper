@@ -15,7 +15,9 @@ import {
   resolveGridCollision,
   overflowReach,
   reserveFor,
-  moveGroup,
+  planGroupMove,
+  applyGroupMove,
+  anchorPoint,
 } from "../src/lib/drag.ts";
 
 const TRAY = "tray";
@@ -167,42 +169,65 @@ const emptyGrid = () => {
   return m;
 };
 
-test("moveGroup: followers keep their offset from the dragged card", () => {
-  // a was dragged from (0,0) to (0,1) by moveBetween; b at (1,0) follows to (1,1).
-  const prev = { ...emptyGrid(), [g(0, 1)]: ["a"], [g(1, 0)]: ["b"] };
-  const next = moveGroup(prev, "a", g(0, 0), ["b"], GRID);
+const move = (prev, ids, originC, targetC, overId = null) =>
+  applyGroupMove(prev, planGroupMove(prev, ids, originC, targetC, GRID), ids[0], overId);
+
+test("group move: every card keeps its offset from the grabbed card", () => {
+  const prev = { ...emptyGrid(), [g(0, 0)]: ["a"], [g(1, 0)]: ["b"] };
+  const next = move(prev, ["a", "b"], g(0, 0), g(0, 1));
+  assert.deepEqual(next[g(0, 1)], ["a"]);
   assert.deepEqual(next[g(1, 1)], ["b"]);
-  assert.deepEqual(next[g(1, 0)], []);
+  assert.deepEqual(next[g(0, 0)], []);
   assertNoDuplicates(next);
 });
 
-test("moveGroup: delta is clamped so nothing falls off the grid", () => {
-  // a moves +2 columns, but b already sits in column 1: b can only move +1,
-  // and the group delta is clamped to that.
-  const prev = { ...emptyGrid(), [g(0, 2)]: ["a"], [g(1, 1)]: ["b"] };
-  const next = moveGroup(prev, "a", g(0, 0), ["b"], GRID);
+test("group move: delta is clamped for the grabbed card too", () => {
+  // a aims +2 columns but b in column 1 can only go +1: the whole group,
+  // a included, moves +1 so the shape holds.
+  const prev = { ...emptyGrid(), [g(0, 0)]: ["a"], [g(1, 1)]: ["b"] };
+  const next = move(prev, ["a", "b"], g(0, 0), g(0, 2));
+  assert.deepEqual(next[g(0, 1)], ["a"]);
   assert.deepEqual(next[g(1, 2)], ["b"]);
   assertNoDuplicates(next);
 });
 
-test("moveGroup: same-cell followers stack right below the dragged card", () => {
-  const prev = { ...emptyGrid(), [g(0, 1)]: ["x", "a", "y"], [g(0, 0)]: ["b", "c"] };
-  const next = moveGroup(prev, "a", g(0, 0), ["c", "b"], GRID);
-  assert.deepEqual(next[g(0, 1)], ["x", "a", "b", "c", "y"]);
+test("group move: dropping back in the origin cell changes nothing", () => {
+  // Regression: the grabbed card used to be pulled out and re-appended,
+  // scrambling the order of its cell.
+  const prev = { ...emptyGrid(), [g(0, 0)]: ["a", "x", "b"] };
+  assert.equal(planGroupMove(prev, ["a", "b"], g(0, 0), g(0, 0), GRID), null);
+  assert.equal(move(prev, ["a", "b"], g(0, 0), g(0, 0)), prev);
+});
+
+test("group move: cards keep their own order, inserted as a block before overId", () => {
+  // Grabbing the middle card must not pull it above the others.
+  const prev = { ...emptyGrid(), [g(0, 0)]: ["b", "a", "c"], [g(0, 1)]: ["x", "y"] };
+  const next = move(prev, ["a", "c", "b"], g(0, 0), g(0, 1), "y");
+  assert.deepEqual(next[g(0, 1)], ["x", "b", "a", "c", "y"]);
   assert.deepEqual(next[g(0, 0)], []);
 });
 
-test("moveGroup: dropped in the parking lot takes the whole group", () => {
-  const prev = { ...emptyGrid(), [TRAY]: ["a"], [g(1, 2)]: ["b"] };
-  const next = moveGroup(prev, "a", g(0, 0), ["b"], GRID);
+test("group move: parking lot takes the whole group", () => {
+  const prev = { ...emptyGrid(), [g(0, 0)]: ["a"], [g(1, 2)]: ["b"] };
+  const next = move(prev, ["a", "b"], g(0, 0), TRAY);
   assert.deepEqual(next[TRAY], ["a", "b"]);
   assertNoDuplicates(next);
 });
 
-test("moveGroup: no movement, unknown ids and stale followers are no-ops", () => {
-  const prev = { ...emptyGrid(), [g(0, 0)]: ["a"], [g(1, 0)]: ["b"] };
-  assert.equal(moveGroup(prev, "a", g(0, 0), ["b"], GRID), prev);
-  assert.equal(moveGroup(prev, "ghost", g(0, 1), ["b"], GRID), prev);
-  const moved = { ...emptyGrid(), [g(0, 1)]: ["a"] };
-  assert.equal(moveGroup(moved, "a", g(0, 0), ["deleted"], GRID), moved);
+test("group move: unknown ids are skipped", () => {
+  const prev = { ...emptyGrid(), [g(0, 0)]: ["a"] };
+  const next = move(prev, ["a", "deleted"], g(0, 0), g(0, 1));
+  assert.deepEqual(next[g(0, 1)], ["a"]);
+  assert.equal(planGroupMove(prev, ["ghost"], g(0, 0), g(0, 1), GRID), null);
+});
+
+test("anchorPoint: wide card anchors on its first column, not the cursor", () => {
+  // span=2 card (448px) grabbed near its right edge.
+  const rect = { left: 100, top: 50, width: 436, height: 80 };
+  assert.deepEqual(anchorPoint(rect, { x: 500, y: 90 }, 224), { x: 212, y: 90 });
+  // Narrow card: its own centre.
+  assert.deepEqual(anchorPoint({ left: 100, top: 50, width: 212, height: 80 }, null, 224), {
+    x: 206,
+    y: 90,
+  });
 });
