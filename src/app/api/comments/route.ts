@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
 import { AUTH_COOKIE, NAME_COOKIE, roleForToken } from "@/lib/auth";
+import { actorFrom, notDeleted, softDeletePatch, stampInsert } from "@/lib/safety";
 
 // All comments, oldest first. The board groups them by card_id client-side and
 // polls this on an interval so threads stay live across users.
 export async function GET() {
   const sb = getServiceClient();
-  const { data, error } = await sb
-    .from("comments")
-    .select("*")
-    .order("created_at", { ascending: true });
+  const { data, error } = await notDeleted(sb.from("comments").select("*")).order(
+    "created_at",
+    { ascending: true }
+  );
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ comments: data });
 }
@@ -33,20 +34,26 @@ export async function POST(req: NextRequest) {
   const sb = getServiceClient();
   const { data, error } = await sb
     .from("comments")
-    .insert({
-      card_id,
-      author_name: author,
-      author_role: role,
-      author_color: String(color ?? "#64748b"),
-      body: text,
-    })
+    .insert(
+      stampInsert(
+        {
+          card_id,
+          author_name: author,
+          author_role: role,
+          author_color: String(color ?? "#64748b"),
+          body: text,
+        },
+        actorFrom(req)
+      )
+    )
     .select()
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ comment: data });
 }
 
-// Resolve a thread: delete every comment on a card. Editor-only — the action
+// Resolve a thread: soft-delete every live comment on a card (restorable from
+// "Recently deleted"). Editor-only — the action
 // clears the thread for everyone, so guests can't wipe it.
 export async function DELETE(req: NextRequest) {
   const role = roleForToken(req.cookies.get(AUTH_COOKIE)?.value);
@@ -57,7 +64,11 @@ export async function DELETE(req: NextRequest) {
   if (!cardId) return NextResponse.json({ error: "card_id required" }, { status: 400 });
 
   const sb = getServiceClient();
-  const { error } = await sb.from("comments").delete().eq("card_id", cardId);
+  const { error } = await sb
+    .from("comments")
+    .update(softDeletePatch(actorFrom(req)))
+    .eq("card_id", cardId)
+    .is("deleted_at", null);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });
 }

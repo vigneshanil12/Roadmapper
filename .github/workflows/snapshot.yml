@@ -1,0 +1,57 @@
+name: roadmap-snapshot
+
+# Nightly full export of the board (cards, comments, settings — soft-deleted
+# rows included) committed to the private ops repo as
+# snapshots/roadmap/<YYYY-MM-DD>.json. Git there keeps every version.
+# Skips the commit when nothing changed since the last snapshot.
+#
+# Secrets (Settings → Secrets and variables → Actions):
+#   EXPORT_TOKEN    same value as the Vercel env var EXPORT_TOKEN
+#   OPS_REPO_TOKEN  fine-grained PAT, vigneshanil1297, Contents read/write on
+#                   urbanaut-agent-ops only
+on:
+  schedule:
+    - cron: "0 21 * * *" # daily at 21:00 UTC (02:30 IST)
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Export board
+        env:
+          EXPORT_TOKEN: ${{ secrets.EXPORT_TOKEN }}
+        run: |
+          code=$(curl -sS -o /tmp/export.json -w "%{http_code}" \
+            -H "Authorization: Bearer $EXPORT_TOKEN" \
+            https://roadmapper-orpin.vercel.app/api/export)
+          echo "HTTP $code"
+          test "$code" = "200"
+          jq -e '.schema == "roadmapper-export/1" and (.cards | type == "array")' /tmp/export.json > /dev/null
+          jq -c '.counts' /tmp/export.json
+
+      - name: Check out ops repo
+        uses: actions/checkout@v4
+        with:
+          repository: vigneshanil1297/urbanaut-agent-ops
+          token: ${{ secrets.OPS_REPO_TOKEN }}
+          path: ops
+
+      - name: Commit snapshot
+        working-directory: ops
+        run: |
+          dir=snapshots/roadmap
+          mkdir -p "$dir"
+          day=$(date -u +%F)
+          latest=$(ls "$dir"/[0-9]*.json 2>/dev/null | sort | tail -1 || true)
+          if [ -n "$latest" ] && \
+             [ "$(jq -S 'del(.exported_at)' "$latest")" = "$(jq -S 'del(.exported_at)' /tmp/export.json)" ]; then
+            echo "No change since $latest — skipping commit."
+            exit 0
+          fi
+          jq . /tmp/export.json > "$dir/$day.json"
+          git config user.name "roadmapper-snapshot"
+          git config user.email "snapshot@urbanaut.in"
+          git add "$dir/$day.json"
+          git commit -m "snapshot: roadmap $day"
+          git push

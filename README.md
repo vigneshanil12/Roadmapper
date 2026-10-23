@@ -32,6 +32,7 @@ Open http://localhost:3000 → enter the password from `APP_PASSWORD`.
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Project Settings → API → `service_role` secret |
 | `APP_PASSWORD` | Pick the shared password your team types to log in |
 | `APP_SESSION_SECRET` | Random string for the session cookie. `openssl rand -hex 32` |
+| `EXPORT_TOKEN` | Bearer token for `GET /api/export` (nightly snapshot). `openssl rand -hex 32`. Unset = export always 401 |
 
 ## Supabase setup
 
@@ -58,7 +59,7 @@ To change the password later: update `APP_PASSWORD` in Vercel env vars → redep
 - **Move**: drag a card; it snaps into the target cell and stacks. Drag within a cell to reorder.
 - **Edit**: double-click a card, or hover → ✎.
 - **Status**: hover → ○ button cycles normal → tentative (dashed) → done (strikethrough).
-- **Delete**: hover → ✕.
+- **Delete**: hover → ✕. Deletes are soft — editors can bring cards and comments back from **Recently deleted** in the header (last 30 days).
 
 ## Crash reports
 
@@ -79,3 +80,74 @@ Client-side crashes are captured and stored, not just logged to the console:
 
 Run `npm test` for the drag container-math regression tests (`src/lib/drag.ts`),
 which pin the invariants behind two past drag crashes.
+
+## Data safety
+
+Nothing on the board is hard-deleted by the app, and every change is recorded.
+
+- **Soft delete.** Deleting a card, a comment or resolving a thread sets
+  `deleted_at` instead of removing the row. Every read (board, comments,
+  assistant) filters `deleted_at is null`.
+- **Who changed what.** `created_by` / `updated_by` on `cards` and `comments`
+  (`updated_by` on `settings`) are stamped server-side from the `rm_name` login
+  cookie, never from the request body (`src/lib/safety.ts`).
+- **History.** A trigger copies every INSERT / UPDATE / DELETE on `cards`,
+  `comments` and `settings` into `row_history` (`old` + `new` row as jsonb,
+  `actor`, `changed_at`). Reorders within a cell (position-only updates) are skipped to
+  save space; moves to another cell are kept. Because it's a trigger, it also
+  catches edits made by hand in the SQL editor.
+- **Nightly snapshot.** `.github/workflows/snapshot.yml` calls `/api/export` at
+  21:00 UTC and commits `snapshots/roadmap/<date>.json` to the private ops repo
+  (`vigneshanil1297/urbanaut-agent-ops`) when something changed. The export
+  includes soft-deleted rows.
+
+### Restore a card or comment
+Editors: header → **Recently deleted** → **Restore** (last 30 days). The card
+comes back in its old cell with its comment thread. Older than 30 days, in the
+SQL editor:
+
+```sql
+update cards set deleted_at = null, updated_by = 'Vignesh' where id = '<card id>';
+```
+
+### Find who changed something
+
+```sql
+select changed_at, op, actor, old->>'title' as old_title, new->>'title' as new_title,
+       old->>'col_month' as old_month, new->>'col_month' as new_month
+from row_history
+where table_name = 'cards' and row_id = '<card id>'
+order by changed_at desc;
+```
+
+### Put back an older version of a card's text
+
+```sql
+-- 1. pick the version: copy the history id
+select id, changed_at, actor, old->>'title' as title, old->>'body' as body
+from row_history where table_name = 'cards' and row_id = '<card id>' order by changed_at desc;
+
+-- 2. restore title + body from it
+update cards c set title = h.old->>'title', body = h.old->>'body', updated_by = 'Vignesh'
+from row_history h where h.id = '<history id>' and c.id = h.row_id::uuid;
+```
+
+### Restore from a snapshot
+Snapshots live in the ops repo under `snapshots/roadmap/`. To bring back a
+card that was hard-deleted (only possible from SQL), copy its object from the
+snapshot's `cards` array and insert it:
+
+```sql
+insert into cards select * from jsonb_populate_record(null::cards, '<card json>'::jsonb);
+```
+
+Same for `comments` (insert the card first). Never bulk-replace the table from
+a snapshot without checking `row_history` for changes made after it.
+
+### Export contract (`GET /api/export`)
+`Authorization: Bearer $EXPORT_TOKEN`. Returns
+`{ schema: "roadmapper-export/1", exported_at, counts: { cards, cards_deleted,
+comments, comments_deleted, settings }, cards[], comments[], settings[] }`,
+full rows including `deleted_at`, `created_by`, `updated_by`. Agents (R2) read
+the snapshots, never this route directly. Bump `schema` on any breaking change.
+

@@ -17,6 +17,9 @@ export function proxy(req: NextRequest) {
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/login") ||
     pathname.startsWith("/api/health") ||
+    // Bearer-token export for the nightly snapshot job; the route checks the
+    // token itself and fails closed when EXPORT_TOKEN is unset.
+    pathname === "/api/export" ||
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico"
   ) {

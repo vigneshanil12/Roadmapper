@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
+import { notDeleted } from "@/lib/safety";
 import { AUTH_COOKIE, roleForToken } from "@/lib/auth";
 import { buildBoardSnapshot, systemPrompt } from "@/lib/assistant";
 import type { Card, Comment } from "@/lib/types";
@@ -57,8 +58,10 @@ export async function POST(req: NextRequest) {
 
   const sb = getServiceClient();
   const [cardsRes, commentsRes, settingsRes] = await Promise.all([
-    sb.from("cards").select("*"),
-    sb.from("comments").select("*").order("created_at", { ascending: true }).limit(500),
+    notDeleted(sb.from("cards").select("*")),
+    notDeleted(sb.from("comments").select("*"))
+      .order("created_at", { ascending: true })
+      .limit(500),
     sb.from("settings").select("product_context").eq("id", 1).maybeSingle(),
   ]);
   if (cardsRes.error) {
