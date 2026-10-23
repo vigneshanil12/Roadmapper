@@ -13,6 +13,9 @@ import {
   reorderWithin,
   findContainerIn,
   resolveGridCollision,
+  overflowReach,
+  reserveFor,
+  moveGroup,
 } from "../src/lib/drag.ts";
 
 const TRAY = "tray";
@@ -124,4 +127,82 @@ test("resolveGridCollision: card in the pointer's own cell wins (insertion index
 
 test("resolveGridCollision: empty cell falls back to the cell id", () => {
   assert.equal(resolveGridCollision({ [A]: ["wide"] }, B, ["wide"]), B);
+});
+
+// Wide cards (span > 2): each cell reports how deep its wide cards reach into
+// every column they cover, and a cell reserves the deepest overhang from the left.
+test("overflowReach: each card covers span-1 columns", () => {
+  assert.deepEqual(overflowReach([]), []);
+  assert.deepEqual(overflowReach([{ bottom: 50, span: 2 }]), [50]);
+  assert.deepEqual(
+    overflowReach([
+      { bottom: 50, span: 4 },
+      { bottom: 120, span: 2 },
+    ]),
+    [120, 50, 50]
+  );
+});
+
+test("reserveFor: overhang from two and three cells away", () => {
+  const row = ["c0", "c1", "c2", "c3", "c4"];
+  const overflow = { c0: [80, 80, 80], c1: [40] };
+  assert.equal(reserveFor(overflow, row, 0), 0);
+  assert.equal(reserveFor(overflow, row, 1), 80);
+  assert.equal(reserveFor(overflow, row, 2), 80);
+  assert.equal(reserveFor(overflow, row, 3), 80);
+  assert.equal(reserveFor(overflow, row, 4), 0);
+  assert.equal(reserveFor({ c1: [40] }, row, 2), 40);
+});
+
+// Group move: followers shift by the dragged card's row/column delta.
+const GRID = {
+  cats: ["growth", "features"],
+  cols: ["2026|8|0", "2026|8|1", "2026|9|0"],
+  tray: TRAY,
+};
+const g = (cat, col) => `${GRID.cats[cat]}|${GRID.cols[col]}`;
+const emptyGrid = () => {
+  const m = { [TRAY]: [] };
+  for (let r = 0; r < 2; r++) for (let c = 0; c < 3; c++) m[g(r, c)] = [];
+  return m;
+};
+
+test("moveGroup: followers keep their offset from the dragged card", () => {
+  // a was dragged from (0,0) to (0,1) by moveBetween; b at (1,0) follows to (1,1).
+  const prev = { ...emptyGrid(), [g(0, 1)]: ["a"], [g(1, 0)]: ["b"] };
+  const next = moveGroup(prev, "a", g(0, 0), ["b"], GRID);
+  assert.deepEqual(next[g(1, 1)], ["b"]);
+  assert.deepEqual(next[g(1, 0)], []);
+  assertNoDuplicates(next);
+});
+
+test("moveGroup: delta is clamped so nothing falls off the grid", () => {
+  // a moves +2 columns, but b already sits in column 1: b can only move +1,
+  // and the group delta is clamped to that.
+  const prev = { ...emptyGrid(), [g(0, 2)]: ["a"], [g(1, 1)]: ["b"] };
+  const next = moveGroup(prev, "a", g(0, 0), ["b"], GRID);
+  assert.deepEqual(next[g(1, 2)], ["b"]);
+  assertNoDuplicates(next);
+});
+
+test("moveGroup: same-cell followers stack right below the dragged card", () => {
+  const prev = { ...emptyGrid(), [g(0, 1)]: ["x", "a", "y"], [g(0, 0)]: ["b", "c"] };
+  const next = moveGroup(prev, "a", g(0, 0), ["c", "b"], GRID);
+  assert.deepEqual(next[g(0, 1)], ["x", "a", "b", "c", "y"]);
+  assert.deepEqual(next[g(0, 0)], []);
+});
+
+test("moveGroup: dropped in the parking lot takes the whole group", () => {
+  const prev = { ...emptyGrid(), [TRAY]: ["a"], [g(1, 2)]: ["b"] };
+  const next = moveGroup(prev, "a", g(0, 0), ["b"], GRID);
+  assert.deepEqual(next[TRAY], ["a", "b"]);
+  assertNoDuplicates(next);
+});
+
+test("moveGroup: no movement, unknown ids and stale followers are no-ops", () => {
+  const prev = { ...emptyGrid(), [g(0, 0)]: ["a"], [g(1, 0)]: ["b"] };
+  assert.equal(moveGroup(prev, "a", g(0, 0), ["b"], GRID), prev);
+  assert.equal(moveGroup(prev, "ghost", g(0, 1), ["b"], GRID), prev);
+  const moved = { ...emptyGrid(), [g(0, 1)]: ["a"] };
+  assert.equal(moveGroup(moved, "a", g(0, 0), ["deleted"], GRID), moved);
 });

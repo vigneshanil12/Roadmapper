@@ -8,7 +8,7 @@ create table if not exists public.cards (
   col_year int not null,
   col_month int not null,                  -- 1-12
   col_half int not null,                   -- 0 = first half, 1 = second half
-  span int not null default 1,             -- column width: 1 = half month, 2 = full month
+  span int not null default 1,             -- column width in half-months (1 = half, 2 = full month, ...)
   value int not null default 0,            -- value added, 0-3 (0 = none)
   position int not null default 0,         -- stack order within a cell
   status text not null default 'normal',   -- normal | done | tentative
