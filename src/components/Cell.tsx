@@ -35,6 +35,7 @@ export default function Cell({
   onOpenComments,
   selected,
   followingIds,
+  dropTarget = false,
   onSelect,
 }: {
   cellId: string;
@@ -74,6 +75,8 @@ export default function Cell({
   selected: Set<string>;
   // Selected cards riding along with the card being dragged.
   followingIds: Set<string> | null;
+  // A card of the group being dragged will land here.
+  dropTarget?: boolean;
   onSelect: (id: string, additive: boolean) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: cellId });
@@ -142,7 +145,11 @@ export default function Cell({
       }}
       style={reserveTop ? { paddingTop: reserveTop } : undefined}
       className={`group/cell relative flex min-h-[96px] flex-col gap-1.5 border-b border-r border-slate-200 p-1.5 transition-[padding] duration-200 ease-out ${rowBg} ${edgeClass} ${
-        isOver ? "ring-2 ring-inset ring-slate-400" : ""
+        dropTarget
+          ? "bg-sky-500/10 ring-2 ring-inset ring-sky-500"
+          : isOver
+          ? "ring-2 ring-inset ring-slate-400"
+          : ""
       }`}
     >
       <SortableContext items={cardIds} strategy={verticalListSortingStrategy}>
