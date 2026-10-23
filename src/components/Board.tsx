@@ -28,6 +28,7 @@ import CardItem from "./CardItem";
 import Tray from "./Tray";
 import CommentPopover from "./CommentPopover";
 import AssistantPanel from "./AssistantPanel";
+import RecentlyDeleted from "./RecentlyDeleted";
 
 const LABEL_W = 168;
 const COL_W = 224;
@@ -208,6 +209,7 @@ export default function Board() {
   const [statusFilter, setStatusFilter] = useState<Set<CardStatus>>(new Set());
   const searchRef = useRef<HTMLInputElement>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [showDeleted, setShowDeleted] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
 
   // Live presence — who else has the board open. Avatars in the header.
@@ -1100,6 +1102,15 @@ export default function Board() {
           >
             ✨ Assistant
           </button>
+          {isEditor && (
+            <button
+              onClick={() => setShowDeleted(true)}
+              title="Restore deleted cards and comments"
+              className="rounded border border-slate-300 px-2 py-1 hover:bg-slate-100"
+            >
+              Recently deleted
+            </button>
+          )}
           <button
             onClick={() => setShowHelp(true)}
             title="Keyboard shortcuts (?)"
@@ -1326,6 +1337,8 @@ export default function Board() {
           </div>
         </div>
       )}
+
+      {showDeleted && <RecentlyDeleted onClose={() => setShowDeleted(false)} />}
 
       {commentCard && (
         <CommentPopover

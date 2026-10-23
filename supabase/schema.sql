@@ -71,7 +71,9 @@ grant all privileges on table public.presence to service_role;
 
 -- Card comment threads. Each row is one comment anchored to a card. Editors and
 -- view-only guests can both post; the role is stamped server-side from the auth
--- token (not a client field). Deleting a card cascades its comments away.
+-- token (not a client field). The app soft-deletes cards (deleted_at), so the
+-- cascade below only fires on a hard delete made by hand in SQL — and the
+-- row_history trigger still records every comment it removes.
 create table if not exists public.comments (
   id uuid primary key default gen_random_uuid(),
   card_id uuid not null references public.cards (id) on delete cascade,
@@ -124,3 +126,82 @@ create index if not exists client_errors_created_idx
 
 alter table public.client_errors enable row level security;
 grant all privileges on table public.client_errors to service_role;
+
+-- R1 data safety (also shipped as supabase/migrations/20261023_r1_safety.sql):
+-- actor stamps, soft delete, and a row_history trigger on cards / comments /
+-- settings. See README → Data safety.
+alter table public.cards add column if not exists deleted_at timestamptz;
+alter table public.cards add column if not exists created_by text;
+alter table public.cards add column if not exists updated_by text;
+
+alter table public.comments add column if not exists deleted_at timestamptz;
+alter table public.comments add column if not exists created_by text;
+alter table public.comments add column if not exists updated_by text;
+
+alter table public.settings add column if not exists updated_by text;
+
+create table if not exists public.row_history (
+  id uuid primary key default gen_random_uuid(),
+  table_name text not null,                 -- cards | comments | settings
+  row_id text not null,
+  op text not null,                         -- INSERT | UPDATE | DELETE
+  old jsonb,
+  new jsonb,
+  actor text not null default 'unknown',
+  changed_at timestamptz not null default clock_timestamp()
+);
+
+create index if not exists row_history_row_idx
+  on public.row_history (table_name, row_id, changed_at desc);
+create index if not exists row_history_at_idx
+  on public.row_history (changed_at desc);
+
+alter table public.row_history enable row level security;
+grant all privileges on table public.row_history to service_role;
+
+-- Position-only reorders (a drag within a cell) are skipped: they carry no
+-- content and are the bulk of all writes, so logging them would eat the free
+-- tier's 500 MB for nothing. A move to another cell changes col_* and is kept.
+create or replace function public.log_row_history()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  o jsonb := case when tg_op = 'INSERT' then null else to_jsonb(old) end;
+  n jsonb := case when tg_op = 'DELETE' then null else to_jsonb(new) end;
+  noise text[] := array['position', 'updated_at', 'updated_by'];
+begin
+  if tg_op = 'UPDATE' and (o - noise) = (n - noise) then
+    return null;
+  end if;
+  insert into public.row_history (table_name, row_id, op, old, new, actor)
+  values (
+    tg_table_name,
+    coalesce(n ->> 'id', o ->> 'id'),
+    tg_op,
+    o,
+    n,
+    coalesce(n ->> 'updated_by', n ->> 'created_by', o ->> 'updated_by', 'unknown')
+  );
+  return null;
+end;
+$$;
+
+create or replace trigger cards_row_history
+  after insert or update or delete on public.cards
+  for each row execute function public.log_row_history();
+
+create or replace trigger comments_row_history
+  after insert or update or delete on public.comments
+  for each row execute function public.log_row_history();
+
+create or replace trigger settings_row_history
+  after insert or update or delete on public.settings
+  for each row execute function public.log_row_history();
+
+create index if not exists cards_deleted_idx on public.cards (deleted_at)
+  where deleted_at is not null;
+create index if not exists comments_deleted_idx on public.comments (deleted_at)
+  where deleted_at is not null;

@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
 import { AUTH_COOKIE, NAME_COOKIE, roleForToken } from "@/lib/auth";
+import { actorFrom, softDeletePatch } from "@/lib/safety";
 
-// Delete a single comment. Editors can delete any; guests can delete only their
+// Soft-delete a single comment. Editors can delete any; guests can delete only their
 // own (matched on the display name carried in the rm_name cookie).
 export async function DELETE(
   req: NextRequest,
@@ -25,7 +26,11 @@ export async function DELETE(
     }
   }
 
-  const { error } = await sb.from("comments").delete().eq("id", id);
+  const { error } = await sb
+    .from("comments")
+    .update(softDeletePatch(actorFrom(req)))
+    .eq("id", id)
+    .is("deleted_at", null);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });
 }

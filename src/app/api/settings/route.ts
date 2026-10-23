@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
 import { AUTH_COOKIE, roleForToken } from "@/lib/auth";
+import { actorFrom } from "@/lib/safety";
 
 // Shared app settings, currently just the AI assistant's product context. Single
 // row (id = 1) so the context is set once and shared across all editors.
@@ -31,6 +32,7 @@ export async function PUT(req: NextRequest) {
     id: 1,
     product_context: String(product_context ?? ""),
     updated_at: new Date().toISOString(),
+    updated_by: actorFrom(req),
   });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });

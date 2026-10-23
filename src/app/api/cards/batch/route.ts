@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
+import { actorFrom } from "@/lib/safety";
 
 // Persist a set of cell/position changes after a drag, in one round trip.
 export async function POST(req: NextRequest) {
@@ -9,6 +10,7 @@ export async function POST(req: NextRequest) {
   }
   const sb = getServiceClient();
   const stamp = new Date().toISOString();
+  const actor = actorFrom(req);
   await Promise.all(
     updates.map((u: Record<string, unknown>) =>
       sb
@@ -21,6 +23,7 @@ export async function POST(req: NextRequest) {
           position: u.position,
           tray: u.tray ?? false,
           updated_at: stamp,
+          updated_by: actor,
         })
         .eq("id", u.id as string)
     )

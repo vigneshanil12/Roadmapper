@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
+import { actorFrom, softDeletePatch, stampUpdate } from "@/lib/safety";
 
 const FIELDS = [
   "title",
@@ -27,7 +28,7 @@ export async function PATCH(
   const sb = getServiceClient();
   const { data, error } = await sb
     .from("cards")
-    .update(patch)
+    .update(stampUpdate(patch, actorFrom(req)))
     .eq("id", id)
     .select()
     .single();
@@ -35,13 +36,19 @@ export async function PATCH(
   return NextResponse.json({ card: data });
 }
 
+// Soft delete: the card is hidden, not removed, so it (and its comment thread)
+// can be restored from "Recently deleted".
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
   const sb = getServiceClient();
-  const { error } = await sb.from("cards").delete().eq("id", id);
+  const { error } = await sb
+    .from("cards")
+    .update(softDeletePatch(actorFrom(req)))
+    .eq("id", id)
+    .is("deleted_at", null);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });
 }
