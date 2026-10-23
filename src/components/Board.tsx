@@ -326,6 +326,10 @@ export default function Board() {
   // Redo stack: snapshots popped by undo, replayed by Ctrl+Shift+Z. Cleared on
   // any fresh change (pushHistory) since a new action invalidates the redo path.
   const redoRef = useRef<Array<Snapshot>>([]);
+  // Set by endDrag; the layout-persist effect then drops the undo step the
+  // drag pushed if nothing actually moved (and restores the redo stack).
+  const dragEndedRef = useRef(false);
+  const dragHistoryRef = useRef<{ len: number; redo: Snapshot[] }>({ len: 0, redo: [] });
   function snapshot(): Snapshot {
     const items = itemsRef.current;
     const cloneItems: Record<string, string[]> = {};
@@ -382,10 +386,35 @@ export default function Board() {
   // server echoes the same value back — otherwise a poll fetch that started
   // before the write lands clobbers it (e.g. status stutters back while cycling).
   const pendingRef = useRef<Record<string, Partial<Card>>>({});
+
+  // Every card write goes through one ordered queue. Fired independently, a
+  // slow write could land after a newer one: undo right after a big drag sent
+  // its restoring PATCHes while the drag's batch save was still in flight, the
+  // batch landed last, and the server (then the next poll) put the cards right
+  // back where they had been dragged.
+  const writeChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  // Writes queued but not yet finished, and a counter bumped per queued write.
+  // The poll uses them to drop snapshots that can't include our latest writes.
+  const writesInFlightRef = useRef(0);
+  const writeSeqRef = useRef(0);
+  function queueWrite(send: () => Promise<unknown>) {
+    writeSeqRef.current++;
+    writesInFlightRef.current++;
+    writeChainRef.current = writeChainRef.current
+      .then(send)
+      .catch(() => {})
+      .finally(() => {
+        writesInFlightRef.current--;
+      });
+  }
+
   useEffect(() => {
     if (!loaded) return;
     const id = setInterval(() => {
       if (activeIdRef.current || editingIdRef.current) return;
+      // Our own writes are still landing: this snapshot would be stale.
+      if (writesInFlightRef.current) return;
+      const seq = writeSeqRef.current;
       const ctrl = new AbortController();
       pollAbortRef.current = ctrl;
       fetch("/api/cards", { signal: ctrl.signal })
@@ -397,6 +426,9 @@ export default function Board() {
           // snapshot replace `items`/`cardsById` mid-drag — yanking the dragged
           // card (or unmounting it) under dnd-kit.
           if (activeIdRef.current || editingIdRef.current) return;
+          // We wrote something after this fetch went out (e.g. an undo): the
+          // snapshot predates it and would revert it on screen.
+          if (writesInFlightRef.current || writeSeqRef.current !== seq) return;
           // A transient API error returns no array; skip this poll cycle rather
           // than crash on the iteration below.
           if (!Array.isArray(cards)) return;
@@ -649,14 +681,24 @@ export default function Board() {
         }
       });
     }
+    // A drag that left every card where it was shouldn't cost an undo step.
+    if (dragEndedRef.current) {
+      dragEndedRef.current = false;
+      if (!updates.length && historyRef.current.length === dragHistoryRef.current.len) {
+        historyRef.current.pop();
+        redoRef.current = dragHistoryRef.current.redo;
+      }
+    }
     if (updates.length) {
       recordAction("persist:layout", `${updates.length} cards`);
       setCardsById(next);
-      fetch("/api/cards/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ updates }),
-      });
+      queueWrite(() =>
+        fetch("/api/cards/batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ updates }),
+        })
+      );
     }
   }, [items, activeId, loaded]);
 
@@ -679,24 +721,32 @@ export default function Board() {
       status: c.status,
       tray: c.tray,
     });
+    const sends: Array<() => Promise<unknown>> = [];
     for (const id in snap) {
       if (!live[id]) {
-        fetch("/api/cards", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id, ...payload(snap[id]) }),
-        });
+        sends.push(() =>
+          fetch("/api/cards", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id, ...payload(snap[id]) }),
+          })
+        );
       } else if (JSON.stringify(payload(live[id])) !== JSON.stringify(payload(snap[id]))) {
-        fetch(`/api/cards/${id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload(snap[id])),
-        });
+        sends.push(() =>
+          fetch(`/api/cards/${id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload(snap[id])),
+          })
+        );
       }
     }
     for (const id in live) {
-      if (!snap[id]) fetch(`/api/cards/${id}`, { method: "DELETE" });
+      if (!snap[id]) sends.push(() => fetch(`/api/cards/${id}`, { method: "DELETE" }));
     }
+    // One queue step: these touch different cards so they can run together,
+    // but only after every earlier write has landed.
+    if (sends.length) queueWrite(() => Promise.all(sends.map((send) => send())));
   }
 
   function applySnapshot(snap: Snapshot) {
@@ -836,7 +886,9 @@ export default function Board() {
   );
 
   function handleDragStart(e: DragStartEvent) {
+    const redoBefore = redoRef.current;
     pushHistory();
+    dragHistoryRef.current = { len: historyRef.current.length, redo: redoBefore };
     setTrayHover(false);
     // Drop any poll already in flight: its snapshot predates this drag, and
     // applying it mid-drag would move the card out from under dnd-kit.
@@ -972,6 +1024,7 @@ export default function Board() {
     dragOriginRef.current = null;
     followersRef.current = [];
     lastDragEndRef.current = Date.now();
+    dragEndedRef.current = true;
     setFollowing(null);
     setGroupLayout([]);
     dropKeyRef.current = "";
@@ -1093,11 +1146,13 @@ export default function Board() {
     setCardsById((p) => ({ ...p, [card.id]: card }));
     setItems((p) => ({ ...p, [cellId]: [...(p[cellId] ?? []), card.id] }));
     setEditingId(card.id);
-    fetch("/api/cards", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(card),
-    });
+    queueWrite(() =>
+      fetch("/api/cards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(card),
+      })
+    );
   }
 
   function saveCard(id: string, patch: Partial<Card>) {
@@ -1106,11 +1161,13 @@ export default function Board() {
     pendingRef.current[id] = { ...pendingRef.current[id], ...patch };
     setCardsById((p) => ({ ...p, [id]: { ...p[id], ...patch } }));
     setEditingId((e) => (e === id ? null : e));
-    fetch(`/api/cards/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
-    });
+    queueWrite(() =>
+      fetch(`/api/cards/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      })
+    );
   }
 
   // Stash an in-progress edit as a draft and leave edit mode (triggered by
@@ -1163,7 +1220,7 @@ export default function Board() {
       for (const k of Object.keys(p)) n[k] = p[k].filter((x) => x !== id);
       return n;
     });
-    fetch(`/api/cards/${id}`, { method: "DELETE" });
+    queueWrite(() => fetch(`/api/cards/${id}`, { method: "DELETE" }));
   }
 
   function resizeCard(id: string, span: number) {
