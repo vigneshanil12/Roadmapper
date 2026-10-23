@@ -93,3 +93,110 @@ export function resolveGridCollision(
   const own = items[cellId] ?? [];
   return candidateIds.find((id) => own.includes(id)) ?? cellId;
 }
+
+// ---- Wide-card overflow --------------------------------------------------
+//
+// A card with span N renders over the N-1 columns to its right. Each cell
+// reports how far down its wide cards reach into each of those columns:
+// reach[k] is the lowest bottom edge (px) among cards that cover the column
+// k+1 to the right, i.e. cards with span > k+1. A span=4 card contributes to
+// reach[0..2]; a span=2 card only to reach[0].
+export function overflowReach(wide: Array<{ bottom: number; span: number }>): number[] {
+  const reach: number[] = [];
+  for (const { bottom, span } of wide) {
+    for (let k = 0; k < span - 1; k++) reach[k] = Math.max(reach[k] ?? 0, bottom);
+  }
+  return reach;
+}
+
+// Top space cell `i` in a row must reserve: the deepest overhang from any cell
+// to its left whose wide cards reach this far.
+export function reserveFor(
+  overflow: Record<string, number[]>,
+  rowCells: string[],
+  i: number
+): number {
+  let max = 0;
+  for (let j = i - 1; j >= 0; j--) {
+    const v = overflow[rowCells[j]]?.[i - j - 1];
+    if (v && v > max) max = v;
+  }
+  return max;
+}
+
+// ---- Group move ----------------------------------------------------------
+//
+// Multi-select drag: dnd-kit only moves the card under the pointer. On drop,
+// the rest of the selection ("followers") is shifted by the same row/column
+// delta the dragged card travelled, so the group keeps its shape. The delta is
+// clamped so no follower falls off the grid. Anything involving the parking
+// lot has no geometry, so followers just land in the same container as the
+// dragged card.
+//
+// Like the rest of this file, `prev` must be the fresh container map from
+// inside a setItems updater — the dragged card's landing cell is read from it.
+export function moveGroup(
+  prev: Containers,
+  activeId: string,
+  originC: string,
+  followerIds: string[],
+  grid: { cats: string[]; cols: string[]; tray: string }
+): Containers {
+  const targetC = findContainerIn(prev, activeId);
+  if (!targetC || targetC === originC) return prev;
+  const want = new Set(followerIds.filter((id) => id !== activeId));
+  // Followers in board order (container, then stack index) so their relative
+  // stacking survives the move.
+  const followers: Array<{ id: string; from: string }> = [];
+  for (const k of Object.keys(prev))
+    for (const id of prev[k]) if (want.has(id)) followers.push({ id, from: k });
+  if (!followers.length) return prev;
+
+  const pos = (cell: string) => {
+    const bar = cell.indexOf("|");
+    return {
+      row: grid.cats.indexOf(cell.slice(0, bar)),
+      col: grid.cols.indexOf(cell.slice(bar + 1)),
+    };
+  };
+  const geometric = originC !== grid.tray && targetC !== grid.tray;
+  let dRow = 0;
+  let dCol = 0;
+  if (geometric) {
+    const a = pos(originC);
+    const b = pos(targetC);
+    if (a.row < 0 || a.col < 0 || b.row < 0 || b.col < 0) return prev;
+    dRow = b.row - a.row;
+    dCol = b.col - a.col;
+    // Clamp so the whole group stays on the grid.
+    for (const f of followers) {
+      if (f.from === grid.tray) continue;
+      const p = pos(f.from);
+      if (p.row < 0 || p.col < 0) continue;
+      dRow = Math.min(Math.max(dRow, -p.row), grid.cats.length - 1 - p.row);
+      dCol = Math.min(Math.max(dCol, -p.col), grid.cols.length - 1 - p.col);
+    }
+  }
+  const destOf = (from: string) => {
+    if (!geometric || from === grid.tray) return targetC;
+    const p = pos(from);
+    if (p.row < 0 || p.col < 0) return from;
+    return `${grid.cats[p.row + dRow]}|${grid.cols[p.col + dCol]}`;
+  };
+
+  const next: Containers = { ...prev };
+  const moved = followers.filter((f) => destOf(f.from) !== f.from);
+  if (!moved.length) return prev;
+  const movedIds = new Set(moved.map((f) => f.id));
+  for (const f of moved) next[f.from] = next[f.from].filter((id) => !movedIds.has(id));
+  const byDest: Record<string, string[]> = {};
+  for (const f of moved) (byDest[destOf(f.from)] ||= []).push(f.id);
+  for (const dest in byDest) {
+    const arr = next[dest] ?? [];
+    // Followers sharing the dragged card's cell sit right below it; elsewhere
+    // they join the bottom of the stack.
+    const at = dest === targetC ? arr.indexOf(activeId) + 1 : arr.length;
+    next[dest] = [...arr.slice(0, at), ...byDest[dest], ...arr.slice(at)];
+  }
+  return next;
+}

@@ -9,7 +9,7 @@ export interface Card {
   col_year: number;
   col_month: number; // 1-12
   col_half: number; // 0 | 1
-  span: number; // column width: 1 = half month, 2 = full month
+  span: number; // column width in half-months: 1 = half month, 2 = full month, ...
   value: number; // value added, 0-3 (0 = none)
   position: number;
   status: CardStatus;

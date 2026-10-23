@@ -15,7 +15,14 @@ import {
   type DragOverEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { findContainerIn, moveBetween, reorderWithin, resolveGridCollision } from "@/lib/drag";
+import {
+  findContainerIn,
+  moveBetween,
+  moveGroup,
+  reorderWithin,
+  reserveFor,
+  resolveGridCollision,
+} from "@/lib/drag";
 import { CATEGORIES } from "@/lib/categories";
 import { buildMonths, currentMonthIndex } from "@/lib/time";
 import { cellKey, TRAY_ID, type Card, type CardStatus, type CategoryId, type Comment } from "@/lib/types";
@@ -79,13 +86,31 @@ export default function Board() {
   const [trayHover, setTrayHover] = useState(false);
   // Unsaved edits, stashed when the user clicks away mid-edit (see onDraft).
   const [drafts, setDrafts] = useState<Record<string, { title: string; body: string }>>({});
-  // Bottom-edge px of the widest overflowing card per cell. A cell with a wide
-  // (span=2) card overflows into the column to its right; that right cell reads
-  // this to reserve top space and realign its own cards clear of the overlap.
-  const [overflow, setOverflow] = useState<Record<string, number>>({});
-  const handleOverflow = useCallback((cellId: string, bottomPx: number) => {
-    setOverflow((p) => (p[cellId] === bottomPx ? p : { ...p, [cellId]: bottomPx }));
+  // Per cell, how far down its wide cards reach into each column to its right
+  // (reach[k] = bottom px in the column k+1 over; see overflowReach). A span=N
+  // card overflows N-1 columns; each covered cell reads this to reserve top
+  // space and realign its own cards clear of the overlap.
+  const [overflow, setOverflow] = useState<Record<string, number[]>>({});
+  const handleOverflow = useCallback((cellId: string, reach: number[]) => {
+    setOverflow((p) =>
+      (p[cellId] ?? []).join() === reach.join() ? p : { ...p, [cellId]: reach }
+    );
   }, []);
+
+  // Multi-select. Cards picked by a marquee drag over empty board space or by
+  // shift/cmd-click; dragging any selected card carries the rest along.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  // Marquee rectangle in grid-content coordinates while it is being drawn.
+  const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  // Selected cards following the dragged one (rendered as ghosts mid-drag).
+  const [following, setFollowing] = useState<Set<string> | null>(null);
+  const followersRef = useRef<string[]>([]);
+  // Container the dragged card started in — the origin of the group's delta.
+  const dragOriginRef = useRef<string | null>(null);
+  // The click that ends a drag lands on a card; don't let it clear the selection.
+  const lastDragEndRef = useRef(0);
 
   // Read-only mode: always on for guests (view-only role), and on for narrow
   // viewports (phones) where the drag-grid is unusable. Disables every edit
@@ -714,6 +739,7 @@ export default function Board() {
       const t = e.target as HTMLElement | null;
       const typing = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA");
       if (e.key === "Escape") {
+        setSelected((p) => (p.size ? new Set() : p));
         if (showHelp) {
           setShowHelp(false);
         } else if (t === searchRef.current) {
@@ -781,6 +807,16 @@ export default function Board() {
     return candidates;
   }, []);
 
+  // Row/column order of the grid, for shifting a selected group by a delta.
+  const groupGrid = useMemo(
+    () => ({
+      cats: CATEGORIES.map((c) => c.id as string),
+      cols: cols.map((c) => `${c.year}|${c.month}|${c.half}`),
+      tray: TRAY_ID,
+    }),
+    [cols]
+  );
+
   function handleDragStart(e: DragStartEvent) {
     pushHistory();
     setTrayHover(false);
@@ -788,8 +824,27 @@ export default function Board() {
     // applying it mid-drag would move the card out from under dnd-kit.
     pollAbortRef.current?.abort();
     pollAbortRef.current = null;
-    setActiveId(String(e.active.id));
-    recordAction("drag:start", `${e.active.id} from ${findContainer(String(e.active.id))}`);
+    const id = String(e.active.id);
+    // Dragging a selected card moves the whole selection; dragging any other
+    // card drops the selection and moves just that one.
+    const sel = selectedRef.current;
+    if (sel.has(id) && sel.size > 1) {
+      followersRef.current = [...sel].filter((x) => x !== id);
+      setFollowing(new Set(followersRef.current));
+    } else {
+      followersRef.current = [];
+      if (sel.size) setSelected(new Set());
+    }
+    // Origin read from `prev`, like lastOverContainerRef — not from a lagging ref.
+    setItems((prev) => {
+      dragOriginRef.current = findContainerIn(prev, id) ?? null;
+      return prev;
+    });
+    setActiveId(id);
+    recordAction(
+      "drag:start",
+      `${id} from ${findContainer(id)}${followersRef.current.length ? ` +${followersRef.current.length}` : ""}`
+    );
   }
 
   function handleDragOver(e: DragOverEvent) {
@@ -831,17 +886,108 @@ export default function Board() {
       setItems((prev) => reorderWithin(prev, activeId, overId));
     }
 
+    // Selected cards follow by the same row/column delta. Queued after the
+    // reorder so `prev` already has the dragged card where it finally landed.
+    const followers = followersRef.current;
+    const origin = dragOriginRef.current;
+    if (followers.length && origin) {
+      setItems((prev) => moveGroup(prev, activeId, origin, followers, groupGrid));
+    }
+
     // Card parked via drag — auto-expand so the user sees where it landed.
     const landedInTray =
       overId === TRAY_ID ||
       lastOverContainerRef.current === TRAY_ID ||
       (itemsRef.current[TRAY_ID]?.includes(activeId) ?? false);
-    if (landedInTray) setTrayOpen(true);
+    if (landedInTray) {
+      setTrayOpen(true);
+      // Tray cards don't render selection; don't leave an invisible one behind.
+      setSelected((p) => (p.size ? new Set() : p));
+    }
 
     recordAction("drag:end", `${activeId} -> ${overId ?? "nowhere"}`);
+    endDrag();
+  }
+
+  // Esc mid-drag. The card stays wherever handleDragOver last put it (as
+  // before); the group just doesn't follow.
+  function handleDragCancel() {
+    recordAction("drag:cancel");
+    endDrag();
+  }
+
+  function endDrag() {
     lastOverContainerRef.current = null;
+    dragOriginRef.current = null;
+    followersRef.current = [];
+    lastDragEndRef.current = Date.now();
+    setFollowing(null);
     setActiveId(null);
     setTrayHover(false);
+  }
+
+  // Click on a card: shift/cmd/ctrl toggles it in the selection; a plain click
+  // clears the selection.
+  const selectCard = useCallback((id: string, additive: boolean) => {
+    if (Date.now() - lastDragEndRef.current < 250) return;
+    setSelected((prev) => {
+      if (!additive) return prev.size ? new Set() : prev;
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  }, []);
+
+  // Marquee select: press on empty board space and drag. Every card the
+  // rectangle touches is selected (added to the selection with shift/cmd/ctrl).
+  // A press without a drag clears the selection. Coordinates are kept relative
+  // to the grid so the rectangle stays put if the board scrolls under it.
+  function startMarquee(e: React.PointerEvent) {
+    if (readOnly || e.button !== 0) return;
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-card], button, textarea, input")) return;
+    const grid = gridRef.current;
+    if (!grid) return;
+    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+    const base = additive ? selectedRef.current : new Set<string>();
+    const g0 = grid.getBoundingClientRect();
+    const x0 = e.clientX - g0.left;
+    const y0 = e.clientY - g0.top;
+    let started = false;
+    function move(ev: PointerEvent) {
+      const g = grid!.getBoundingClientRect();
+      const x1 = ev.clientX - g.left;
+      const y1 = ev.clientY - g.top;
+      if (!started && Math.hypot(x1 - x0, y1 - y0) < 4) return;
+      if (!started) {
+        started = true;
+        document.body.style.userSelect = "none";
+      }
+      setMarquee({ x0, y0, x1, y1 });
+      const left = g.left + Math.min(x0, x1);
+      const right = g.left + Math.max(x0, x1);
+      const top = g.top + Math.min(y0, y1);
+      const bottom = g.top + Math.max(y0, y1);
+      const next = new Set(base);
+      grid!.querySelectorAll<HTMLElement>("[data-card-id]").forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.right > left && r.left < right && r.bottom > top && r.top < bottom)
+          next.add(el.dataset.cardId!);
+      });
+      setSelected((prev) =>
+        prev.size === next.size && [...next].every((id) => prev.has(id)) ? prev : next
+      );
+    }
+    function up() {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.style.userSelect = "";
+      setMarquee(null);
+      if (!started && !additive) setSelected((p) => (p.size ? new Set() : p));
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
   }
 
   function clearDraft(id: string) {
@@ -965,9 +1111,9 @@ export default function Board() {
 
   function resizeCard(id: string, span: number) {
     saveCard(id, { span });
-    // A wide card overflows the next column; keep it at the top of its cell so
-    // smaller cards stack below it instead of leaving dead space above.
-    if (span === 2) {
+    // A wide card overflows the columns to its right; keep it at the top of its
+    // cell so smaller cards stack below it instead of leaving dead space above.
+    if (span > 1) {
       setItems((prev) => {
         const key = Object.keys(prev).find((k) => prev[k].includes(id));
         if (!key || prev[key][0] === id) return prev;
@@ -1134,6 +1280,7 @@ export default function Board() {
         onDragStart={handleDragStart}
         onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
       >
         <div className="flex flex-1 flex-col overflow-hidden">
           <Tray
@@ -1164,6 +1311,7 @@ export default function Board() {
           >
             <div
               ref={gridRef}
+              onPointerDown={startMarquee}
               className="relative grid w-max transition-[grid-template-columns] duration-200 ease-out"
               style={{ gridTemplateColumns: gridCols }}
             >
@@ -1249,8 +1397,23 @@ export default function Board() {
                 commentCounts={commentCounts}
                 onOpenComments={openComments}
                 labelCollapsed={labelCollapsed}
+                selected={selected}
+                followingIds={following}
+                onSelect={selectCard}
               />
             ))}
+
+            {marquee && (
+              <div
+                className="pointer-events-none absolute z-40 rounded-sm border border-sky-500 bg-sky-500/10"
+                style={{
+                  left: Math.min(marquee.x0, marquee.x1),
+                  top: Math.min(marquee.y0, marquee.y1),
+                  width: Math.abs(marquee.x1 - marquee.x0),
+                  height: Math.abs(marquee.y1 - marquee.y0),
+                }}
+              />
+            )}
 
             {/* Live cursors of other users, in grid-content coordinates. */}
             {Object.entries(cursors).map(([id, c]) => (
@@ -1286,6 +1449,7 @@ export default function Board() {
               editing={false}
               colW={COL_W}
               overlay
+              groupCount={following?.size ?? 0}
               onStartEdit={() => {}}
               onSave={() => {}}
               onCancel={() => {}}
@@ -1325,6 +1489,8 @@ export default function Board() {
                 ["⌘/Ctrl + ⇧ + Z", "Redo"],
                 ["Double-click cell", "Add a card"],
                 ["Double-click card", "Edit"],
+                ["Drag on empty space", "Select cards"],
+                ["⇧/⌘ + click card", "Add to selection"],
               ].map(([k, d]) => (
                 <div key={k} className="flex items-center justify-between gap-4">
                   <span>{d}</span>
@@ -1397,6 +1563,9 @@ function RowFragment({
   commentCounts,
   onOpenComments,
   labelCollapsed,
+  selected,
+  followingIds,
+  onSelect,
 }: {
   catId: CategoryId;
   label: string;
@@ -1407,8 +1576,8 @@ function RowFragment({
   colW: number;
   items: Record<string, string[]>;
   cardsById: Record<string, Card>;
-  overflow: Record<string, number>;
-  onOverflow: (cellId: string, bottomPx: number) => void;
+  overflow: Record<string, number[]>;
+  onOverflow: (cellId: string, reach: number[]) => void;
   dragging: boolean;
   readOnly: boolean;
   matchIds: Set<string> | null;
@@ -1426,7 +1595,11 @@ function RowFragment({
   commentCounts: Record<string, number>;
   onOpenComments: (id: string, anchor: DOMRect) => void;
   labelCollapsed: boolean;
+  selected: Set<string>;
+  followingIds: Set<string> | null;
+  onSelect: (id: string, additive: boolean) => void;
 }) {
+  const rowCells = cols.map((c) => cellKey(catId, c.year, c.month, c.half));
   return (
     <>
       <div
@@ -1449,12 +1622,9 @@ function RowFragment({
         const edgeClass = `${c.half === 0 ? "border-l-2 border-l-slate-400" : ""} ${
           i === cols.length - 1 ? "border-r-2 border-r-slate-400" : ""
         }`;
-        // Reserve top space if the cell to our left has a wide card overflowing in.
-        const leftCol = cols[i - 1];
-        const leftId = leftCol
-          ? cellKey(catId, leftCol.year, leftCol.month, leftCol.half)
-          : null;
-        const reserveTop = leftId && overflow[leftId] ? overflow[leftId] + 6 : 0;
+        // Reserve top space if a cell to our left has a wide card overflowing in.
+        const reach = reserveFor(overflow, rowCells, i);
+        const reserveTop = reach ? reach + 6 : 0;
         return (
           <Cell
             key={id}
@@ -1463,6 +1633,7 @@ function RowFragment({
             cardsById={cardsById}
             rowBg={rowBg}
             colW={colW}
+            maxSpan={cols.length - i}
             edgeClass={edgeClass}
             reserveTop={reserveTop}
             onOverflow={onOverflow}
@@ -1482,6 +1653,9 @@ function RowFragment({
             onResize={onResize}
             commentCounts={commentCounts}
             onOpenComments={onOpenComments}
+            selected={selected}
+            followingIds={followingIds}
+            onSelect={onSelect}
           />
         );
       })}

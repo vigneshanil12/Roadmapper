@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import type { Card } from "@/lib/types";
+import { overflowReach } from "@/lib/drag";
 import CardItem from "./CardItem";
 
 export default function Cell({
@@ -12,6 +13,7 @@ export default function Cell({
   cardsById,
   rowBg,
   colW,
+  maxSpan = 2,
   edgeClass = "",
   reserveTop = 0,
   onOverflow,
@@ -31,19 +33,25 @@ export default function Cell({
   onResize,
   commentCounts,
   onOpenComments,
+  selected,
+  followingIds,
+  onSelect,
 }: {
   cellId: string;
   cardIds: string[];
   cardsById: Record<string, Card>;
   rowBg: string;
   colW: number;
+  // Columns left from this one to the grid's end — caps a card's resize.
+  maxSpan?: number;
   edgeClass?: string;
-  // Top padding to reserve because the left-neighbor cell has a wide card
+  // Top padding to reserve because a cell to the left has a wide card
   // overflowing into this column. Pushes this cell's cards clear of it.
   reserveTop?: number;
-  // Reports this cell's own wide-card overflow (bottom edge px) up to the board,
-  // which feeds it to the cell on the right as its reserveTop.
-  onOverflow: (cellId: string, bottomPx: number) => void;
+  // Reports how deep this cell's wide cards reach into each column to its
+  // right (see overflowReach) up to the board, which turns it into reserveTop
+  // for the cells they cover.
+  onOverflow: (cellId: string, reach: number[]) => void;
   // True while any card is being dragged. Measuring is frozen for the duration —
   // see the effect below.
   dragging?: boolean;
@@ -63,6 +71,10 @@ export default function Cell({
   onResize: (id: string, span: number) => void;
   commentCounts: Record<string, number>;
   onOpenComments: (id: string, anchor: DOMRect) => void;
+  selected: Set<string>;
+  // Selected cards riding along with the card being dragged.
+  followingIds: Set<string> | null;
+  onSelect: (id: string, additive: boolean) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: cellId });
   const elRef = useRef<HTMLDivElement | null>(null);
@@ -71,8 +83,8 @@ export default function Cell({
     setNodeRef(node);
   };
 
-  // Measure wide cards that overflow into the next column and report their
-  // lowest bottom edge. Re-runs on size changes (ResizeObserver) and on card
+  // Measure wide cards that overflow into the columns to the right and report
+  // their lowest bottom edge per covered column. Re-runs on size changes (ResizeObserver) and on card
   // add/remove or live span flips (MutationObserver on data-wide), so the right
   // neighbor realigns immediately while a card is being resized.
   //
@@ -90,15 +102,17 @@ export default function Cell({
     const measure = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
-        let maxBottom = 0;
-        el.querySelectorAll<HTMLElement>('[data-wide="1"]').forEach((w) => {
-          const bottom = w.offsetTop + w.offsetHeight;
-          if (bottom > maxBottom) maxBottom = bottom;
+        const wide: Array<{ bottom: number; span: number }> = [];
+        el.querySelectorAll<HTMLElement>("[data-wide]").forEach((w) => {
+          // Round: offsetTop/offsetHeight are integers today, but a fractional
+          // value would never equal the stored one, so every measure would push
+          // a new value and re-render the board forever.
+          wide.push({
+            bottom: Math.round(w.offsetTop + w.offsetHeight),
+            span: Number(w.dataset.wide) || 1,
+          });
         });
-        // Round: offsetTop/offsetHeight are integers today, but a fractional
-        // value would never equal the stored one, so every measure would push a
-        // new value and re-render the board forever.
-        onOverflow(cellId, Math.round(maxBottom));
+        onOverflow(cellId, overflowReach(wide));
       });
     };
     measure();
@@ -106,7 +120,7 @@ export default function Cell({
     ro.observe(el);
     const mo = new MutationObserver(measure);
     // data-wide only: `style` fires on every dnd-kit transform write, and a
-    // span resize flips data-wide anyway (CardItem sets it from the live span).
+    // span resize changes data-wide anyway (CardItem sets it to the live span).
     mo.observe(el, {
       subtree: true,
       childList: true,
@@ -141,6 +155,7 @@ export default function Cell({
               card={card}
               editing={editingId === id}
               colW={colW}
+              maxSpan={maxSpan}
               readOnly={readOnly}
               dim={!!matchIds && !matchIds.has(id)}
               draft={drafts[id] ?? null}
@@ -154,6 +169,9 @@ export default function Cell({
               onResize={onResize}
               commentCount={commentCounts[id] ?? 0}
               onOpenComments={onOpenComments}
+              selected={selected.has(id)}
+              following={!!followingIds?.has(id)}
+              onSelect={onSelect}
             />
           );
         })}

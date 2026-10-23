@@ -39,6 +39,7 @@ export default function CardItem({
   card,
   editing,
   colW,
+  maxSpan = 2,
   readOnly = false,
   dim = false,
   draft = null,
@@ -53,10 +54,16 @@ export default function CardItem({
   overlay = false,
   commentCount = 0,
   onOpenComments,
+  selected = false,
+  following = false,
+  groupCount = 0,
+  onSelect,
 }: {
   card: Card;
   editing: boolean;
   colW: number;
+  // Widest span the resize handle allows — the columns left before the grid ends.
+  maxSpan?: number;
   readOnly?: boolean;
   dim?: boolean;
   draft?: { title: string; body: string } | null;
@@ -71,6 +78,14 @@ export default function CardItem({
   overlay?: boolean;
   commentCount?: number;
   onOpenComments?: (id: string, anchor: DOMRect) => void;
+  // Multi-select: highlighted as part of the selection.
+  selected?: boolean;
+  // Another selected card is being dragged and this one will follow it.
+  following?: boolean;
+  // Drag overlay only: how many other selected cards ride along.
+  groupCount?: number;
+  // Click on the card. `additive` = shift/cmd/ctrl held (toggle in selection).
+  onSelect?: (id: string, additive: boolean) => void;
 }) {
   const cat = CATEGORY_MAP[card.category];
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
@@ -88,7 +103,7 @@ export default function CardItem({
     : {
         transform: CSS.Transform.toString(transform),
         transition,
-        opacity: isDragging ? 0.4 : dim ? 0.3 : 1,
+        opacity: isDragging || following ? 0.4 : dim ? 0.3 : 1,
         width: widthPx,
         zIndex: span > 1 ? 5 : undefined,
       };
@@ -98,18 +113,21 @@ export default function CardItem({
     e.preventDefault();
     const startX = e.clientX;
     const startSpan = card.span ?? 1;
+    // Tracked outside state so `up` can commit it without calling onResize
+    // from inside a setState updater (React runs those during render, and
+    // twice in StrictMode — that fired a Board update mid-render and a
+    // duplicate PATCH).
+    let live = startSpan;
     function move(ev: PointerEvent) {
       const raw = startSpan + Math.round((ev.clientX - startX) / colW);
-      setResizeSpan(Math.min(2, Math.max(1, raw)));
+      live = Math.min(Math.max(maxSpan, startSpan), Math.max(1, raw));
+      setResizeSpan(live);
     }
     function up() {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      setResizeSpan((cur) => {
-        const final = cur ?? startSpan;
-        if (final !== startSpan) onResize(card.id, final);
-        return null;
-      });
+      setResizeSpan(null);
+      if (live !== startSpan) onResize(card.id, live);
     }
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -140,10 +158,11 @@ export default function CardItem({
   const dashHex = card.tray ? "#94a3b8" : cat.cardBorderHex;
   const tickHex = card.tray ? "#1e293b" : cat.labelHex;
 
-  // Wide (span>1) cards overflow into the next column; the neighbor cell reads
-  // this flag to reserve top space and avoid overlap. Live span so it reacts
-  // mid-resize, before the new span persists.
-  const wide = !overlay && !card.tray && span > 1 ? "1" : undefined;
+  // Wide (span>1) cards overflow into the columns to their right; the cell
+  // measures these (value = span) so the cells they cover reserve top space and
+  // avoid overlap. Live span so it reacts mid-resize, before the new span persists.
+  const wide = !overlay && !card.tray && span > 1 ? String(span) : undefined;
+  const ring = selected ? "ring-2 ring-sky-500 ring-offset-1" : "";
 
   if (editing) {
     return (
@@ -176,13 +195,24 @@ export default function CardItem({
       ref={setNodeRef}
       data-wide={wide}
       data-card
+      data-card-id={overlay ? undefined : card.id}
       style={style}
       {...(readOnly ? {} : attributes)}
       {...(readOnly ? {} : listeners)}
       onDoubleClick={readOnly ? undefined : () => onStartEdit(card.id)}
-      className={`${base} group ${readOnly ? "" : "cursor-grab active:cursor-grabbing"}`}
+      onClick={
+        readOnly || !onSelect
+          ? undefined
+          : (e) => onSelect(card.id, e.shiftKey || e.metaKey || e.ctrlKey)
+      }
+      className={`${base} ${ring} group ${readOnly ? "" : "cursor-grab active:cursor-grabbing"}`}
     >
       {isTentative && <DashedBorder color={dashHex} />}
+      {groupCount > 0 && (
+        <span className="absolute -right-2 -top-2 z-10 rounded-full bg-sky-600 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white shadow">
+          +{groupCount}
+        </span>
+      )}
       {draft && (
         <span
           title="Unsaved draft — double-click to keep editing, then Save"
@@ -258,7 +288,7 @@ export default function CardItem({
       </div>
       {!overlay && !readOnly && !card.tray && (
         <div
-          title="Drag to resize (half ↔ full month)"
+          title="Drag to resize (half-month steps)"
           onPointerDown={startResize}
           onDoubleClick={(e) => e.stopPropagation()}
           className="absolute right-0 top-0 z-10 h-full w-2 cursor-ew-resize rounded-r-lg opacity-0 transition hover:bg-black/10 group-hover:opacity-100"
