@@ -501,6 +501,9 @@ function CardEditor({
     <div
       ref={rootRef}
       onPointerDown={(e) => e.stopPropagation()}
+      // The board grid is select-none (for marquee select); text being edited
+      // must stay selectable.
+      className="select-text"
     >
       {/* Title — borderless, rendered exactly like the card title. */}
       <textarea
