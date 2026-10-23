@@ -107,6 +107,9 @@ export default function Board() {
   // Selected cards following the dragged one (rendered as ghosts mid-drag).
   const [following, setFollowing] = useState<Set<string> | null>(null);
   const followersRef = useRef<string[]>([]);
+  // Followers' on-screen offsets from the dragged card, captured at drag start,
+  // so the drag overlay carries the whole group in its original layout.
+  const [groupLayout, setGroupLayout] = useState<Array<{ id: string; dx: number; dy: number }>>([]);
   // Container the dragged card started in — the origin of the group's delta.
   const dragOriginRef = useRef<string | null>(null);
   // The click that ends a drag lands on a card; don't let it clear the selection.
@@ -831,6 +834,17 @@ export default function Board() {
     if (sel.has(id) && sel.size > 1) {
       followersRef.current = [...sel].filter((x) => x !== id);
       setFollowing(new Set(followersRef.current));
+      // Visual only: DOM rects of cards as they sit right now.
+      const rectOf = (x: string) =>
+        document.querySelector(`[data-card-id="${x}"]`)?.getBoundingClientRect();
+      const origin = rectOf(id);
+      const layout: Array<{ id: string; dx: number; dy: number }> = [];
+      if (origin)
+        for (const f of followersRef.current) {
+          const r = rectOf(f);
+          if (r) layout.push({ id: f, dx: r.left - origin.left, dy: r.top - origin.top });
+        }
+      setGroupLayout(layout);
     } else {
       followersRef.current = [];
       if (sel.size) setSelected(new Set());
@@ -922,6 +936,7 @@ export default function Board() {
     followersRef.current = [];
     lastDragEndRef.current = Date.now();
     setFollowing(null);
+    setGroupLayout([]);
     setActiveId(null);
     setTrayHover(false);
   }
@@ -940,7 +955,8 @@ export default function Board() {
   }, []);
 
   // Marquee select: press on empty board space and drag. Every card the
-  // rectangle touches is selected (added to the selection with shift/cmd/ctrl).
+  // rectangle touches is selected; with shift/cmd/ctrl held, touched cards are
+  // toggled against the existing selection instead (add or remove).
   // A press without a drag clears the selection. Coordinates are kept relative
   // to the grid so the rectangle stays put if the board scrolls under it.
   function startMarquee(e: React.PointerEvent) {
@@ -954,16 +970,16 @@ export default function Board() {
     const g0 = grid.getBoundingClientRect();
     const x0 = e.clientX - g0.left;
     const y0 = e.clientY - g0.top;
+    // The grid is select-none, but a selection made before the press (e.g. in
+    // the header) would otherwise stay highlighted under the marquee.
+    window.getSelection()?.removeAllRanges();
     let started = false;
     function move(ev: PointerEvent) {
       const g = grid!.getBoundingClientRect();
       const x1 = ev.clientX - g.left;
       const y1 = ev.clientY - g.top;
       if (!started && Math.hypot(x1 - x0, y1 - y0) < 4) return;
-      if (!started) {
-        started = true;
-        document.body.style.userSelect = "none";
-      }
+      started = true;
       setMarquee({ x0, y0, x1, y1 });
       const left = g.left + Math.min(x0, x1);
       const right = g.left + Math.max(x0, x1);
@@ -972,8 +988,11 @@ export default function Board() {
       const next = new Set(base);
       grid!.querySelectorAll<HTMLElement>("[data-card-id]").forEach((el) => {
         const r = el.getBoundingClientRect();
-        if (r.right > left && r.left < right && r.bottom > top && r.top < bottom)
-          next.add(el.dataset.cardId!);
+        if (r.right > left && r.left < right && r.bottom > top && r.top < bottom) {
+          const id = el.dataset.cardId!;
+          if (additive && base.has(id)) next.delete(id);
+          else next.add(id);
+        }
       });
       setSelected((prev) =>
         prev.size === next.size && [...next].every((id) => prev.has(id)) ? prev : next
@@ -982,7 +1001,6 @@ export default function Board() {
     function up() {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      document.body.style.userSelect = "";
       setMarquee(null);
       if (!started && !additive) setSelected((p) => (p.size ? new Set() : p));
     }
@@ -1312,7 +1330,7 @@ export default function Board() {
             <div
               ref={gridRef}
               onPointerDown={startMarquee}
-              className="relative grid w-max transition-[grid-template-columns] duration-200 ease-out"
+              className="relative grid select-none w-max transition-[grid-template-columns] duration-200 ease-out"
               style={{ gridTemplateColumns: gridCols }}
             >
             {/* Row 1: month headers */}
@@ -1444,20 +1462,19 @@ export default function Board() {
 
         <DragOverlay>
           {activeCard ? (
-            <CardItem
-              card={activeCard}
-              editing={false}
-              colW={COL_W}
-              overlay
-              groupCount={following?.size ?? 0}
-              onStartEdit={() => {}}
-              onSave={() => {}}
-              onCancel={() => {}}
-              onDelete={() => {}}
-              onCycleStatus={() => {}}
-              onCycleValue={() => {}}
-              onResize={() => {}}
-            />
+            <div className="relative">
+              {/* The rest of the selection rides along at its original offsets. */}
+              {groupLayout.map((g) =>
+                cardsById[g.id] ? (
+                  <div key={g.id} className="absolute" style={{ left: g.dx, top: g.dy }}>
+                    <OverlayCard card={cardsById[g.id]} />
+                  </div>
+                ) : null
+              )}
+              <div className="relative">
+                <OverlayCard card={activeCard} groupCount={following?.size ?? 0} />
+              </div>
+            </div>
           ) : null}
         </DragOverlay>
       </DndContext>
@@ -1490,7 +1507,8 @@ export default function Board() {
                 ["Double-click cell", "Add a card"],
                 ["Double-click card", "Edit"],
                 ["Drag on empty space", "Select cards"],
-                ["⇧/⌘ + click card", "Add to selection"],
+                ["⇧/⌘ + click card", "Select / deselect"],
+                ["⇧/⌘ + drag on empty space", "Toggle cards in box"],
               ].map(([k, d]) => (
                 <div key={k} className="flex items-center justify-between gap-4">
                   <span>{d}</span>
@@ -1531,6 +1549,27 @@ export default function Board() {
         isEditor={isEditor}
       />
     </div>
+  );
+}
+
+// Non-interactive card copy rendered inside the drag overlay.
+function OverlayCard({ card, groupCount = 0 }: { card: Card; groupCount?: number }) {
+  const noop = () => {};
+  return (
+    <CardItem
+      card={card}
+      editing={false}
+      colW={COL_W}
+      overlay
+      groupCount={groupCount}
+      onStartEdit={noop}
+      onSave={noop}
+      onCancel={noop}
+      onDelete={noop}
+      onCycleStatus={noop}
+      onCycleValue={noop}
+      onResize={noop}
+    />
   );
 }
 
