@@ -137,9 +137,11 @@ Nothing on the board is hard-deleted by the app, and every change is recorded.
   `actor`, `changed_at`). Reorders within a cell (position-only updates) are skipped to
   save space; moves to another cell are kept. Because it's a trigger, it also
   catches edits made by hand in the SQL editor.
-- **The repo is private** (since 2026-11-16) because GitHub auto-disables
-  scheduled workflows on public repos after 60 days without activity, which
-  would silently stop the snapshot and the Supabase keepalive.
+- **Workflows can't silently switch off.** GitHub auto-disables scheduled
+  workflows on public repos after 60 days without activity. The daily
+  keepalive job re-enables itself and the snapshot via the API each run, which
+  resets that clock. (The repo stays public: on Vercel's Hobby plan a private
+  repo blocks deploys whose commit author isn't the linked account.)
 - **Nightly snapshot.** `.github/workflows/snapshot.yml` calls `/api/export` at
   21:00 UTC and commits `snapshots/roadmap/<date>.json` to the private ops repo
   (`vigneshanil1297/urbanaut-agent-ops`) when something changed. The export
