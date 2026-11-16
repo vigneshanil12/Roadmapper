@@ -27,7 +27,7 @@ import {
 } from "@/lib/drag";
 import { CATEGORIES } from "@/lib/categories";
 import { buildMonths, currentMonthIndex } from "@/lib/time";
-import { cellKey, TRAY_ID, type Card, type CardStatus, type CategoryId, type Comment } from "@/lib/types";
+import { cardCellKey, cellKey, TRAY_ID, type Card, type CardStatus, type CategoryId, type Comment } from "@/lib/types";
 import { getIdentity, getRole, initials, type Identity } from "@/lib/presence";
 import { getBrowserClient } from "@/lib/supabase-browser";
 import { recordAction, reportCrash } from "@/lib/crash";
@@ -40,6 +40,7 @@ import AssistantPanel from "./AssistantPanel";
 import RecentlyDeleted from "./RecentlyDeleted";
 import SaveBanner, { type SaveProblem } from "./SaveBanner";
 import { isSignedOut, sendWrite } from "@/lib/write";
+import { buildItems, buildStep, payload, planUndo, pushBounded, type Step } from "@/lib/undo";
 
 const LABEL_W = 168;
 const COL_W = 224;
@@ -349,26 +350,32 @@ export default function Board() {
   // can tell a tray drop from a grid drop without re-reading a lagging ref.
   const lastOverContainerRef = useRef<string | null>(null);
 
-  // Undo history: snapshots of the full board, newest last. Capped so Ctrl+Z
-  // walks back the last ~20 changes.
-  type Snapshot = { cards: Record<string, Card>; items: Record<string, string[]> };
-  const historyRef = useRef<Array<Snapshot>>([]);
-  // Redo stack: snapshots popped by undo, replayed by Ctrl+Shift+Z. Cleared on
-  // any fresh change (pushHistory) since a new action invalidates the redo path.
-  const redoRef = useRef<Array<Snapshot>>([]);
-  // Set by endDrag; the layout-persist effect then drops the undo step the
-  // drag pushed if nothing actually moved (and restores the redo stack).
+  // Undo history: per-step records of only the cards each action touched
+  // (src/lib/undo.ts), newest last, capped at MAX_STEPS. Undo writes back only
+  // those cards, and skips any that someone else changed since, so other
+  // editors' work is never reverted.
+  const historyRef = useRef<Step<Card>[]>([]);
+  // Redo stack: inverse steps produced by undo. Cleared by any new step.
+  const redoRef = useRef<Step<Card>[]>([]);
+  // Set by endDrag; the layout-persist effect then records the drag's step
+  // (only if something actually moved — a no-op drag costs no undo step).
   const dragEndedRef = useRef(false);
-  const dragHistoryRef = useRef<{ len: number; redo: Snapshot[] }>({ len: 0, redo: [] });
-  function snapshot(): Snapshot {
-    const items = itemsRef.current;
-    const cloneItems: Record<string, string[]> = {};
-    for (const k in items) cloneItems[k] = [...items[k]];
-    return { cards: { ...cardsRef.current }, items: cloneItems };
-  }
-  function pushHistory() {
-    historyRef.current.push(snapshot());
-    if (historyRef.current.length > 20) historyRef.current.shift();
+  // The cards as they were when the current drag started.
+  const dragBaseRef = useRef<Record<string, Card> | null>(null);
+  const [undoNotice, setUndoNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!undoNotice) return;
+    const t = setTimeout(() => setUndoNotice(null), 5000);
+    return () => clearTimeout(t);
+  }, [undoNotice]);
+  function recordStep(
+    before: Record<string, Card>,
+    after: Record<string, Card | undefined>,
+    ids: Iterable<string>
+  ) {
+    const step = buildStep(before, after, ids);
+    if (!step) return;
+    historyRef.current = pushBounded(historyRef.current, step);
     redoRef.current = [];
   }
 
@@ -745,10 +752,9 @@ export default function Board() {
     // A drag that left every card where it was shouldn't cost an undo step.
     if (dragEndedRef.current) {
       dragEndedRef.current = false;
-      if (!updates.length && historyRef.current.length === dragHistoryRef.current.len) {
-        historyRef.current.pop();
-        redoRef.current = dragHistoryRef.current.redo;
-      }
+      const base = dragBaseRef.current;
+      dragBaseRef.current = null;
+      if (base && updates.length) recordStep(base, next, updates.map((u) => u.id as string));
     }
     if (updates.length) {
       recordAction("persist:layout", `${updates.length} cards`);
@@ -768,76 +774,69 @@ export default function Board() {
     }
   }, [items, activeId, loaded, isEditor]);
 
-  // Push the server back to a restored snapshot: recreate cards that were
-  // deleted, delete cards that were added, PATCH the ones that changed.
-  function reconcile(
-    live: Record<string, Card>,
-    snap: Record<string, Card>
-  ) {
-    const payload = (c: Card) => ({
-      title: c.title,
-      body: c.body,
-      category: c.category,
-      col_year: c.col_year,
-      col_month: c.col_month,
-      col_half: c.col_half,
-      span: c.span,
-      value: c.value,
-      position: c.position,
-      status: c.status,
-      tray: c.tray,
-    });
-    const sends: Array<() => Promise<Response>> = [];
-    for (const id in snap) {
-      if (!live[id]) {
-        sends.push(() =>
-          fetch("/api/cards", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id, ...payload(snap[id]) }),
-          })
-        );
-      } else if (JSON.stringify(payload(live[id])) !== JSON.stringify(payload(snap[id]))) {
-        sends.push(() =>
-          fetch(`/api/cards/${id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload(snap[id])),
-          })
-        );
-      }
+  // Apply an undo/redo plan: show its cards, write only the cards it touched.
+  function applyPlan(plan: ReturnType<typeof planUndo<Card>>, label: "undo" | "redo") {
+    if (plan.skipped.length) {
+      const n = plan.skipped.length;
+      const cards = `${n} card${n > 1 ? "s" : ""}`;
+      setUndoNotice(
+        plan.writes.length
+          ? `Skipped ${cards} — changed by someone else since`
+          : `Nothing to ${label} — ${cards} changed by someone else since`
+      );
     }
-    for (const id in live) {
-      if (!snap[id]) sends.push(() => fetch(`/api/cards/${id}`, { method: "DELETE" }));
-    }
-    // One queue step: these touch different cards so they can run together,
-    // but only after every earlier write has landed.
-    if (sends.length) queueWrite("undo/redo", sends, [...new Set([...Object.keys(snap), ...Object.keys(live)])]);
-  }
-
-  function applySnapshot(snap: Snapshot) {
-    const live = cardsRef.current;
+    if (!plan.writes.length) return;
     setEditingId(null);
     setDrafts({});
-    setCardsById(snap.cards);
-    setItems(snap.items);
-    reconcile(live, snap.cards);
+    setCardsById(plan.cards);
+    setItems(buildItems(plan.cards, allCellIds, TRAY_ID, cardCellKey));
+    const sends: Array<() => Promise<Response>> = [];
+    for (const w of plan.writes) {
+      if (w.kind === "delete") {
+        delete pendingRef.current[w.id];
+        sends.push(() => fetch(`/api/cards/${w.id}`, { method: "DELETE" }));
+        continue;
+      }
+      const body = payload(w.card);
+      // Hold the local copy until the server echoes it (see pendingRef).
+      pendingRef.current[w.id] = body as Partial<Card>;
+      sends.push(
+        w.kind === "create"
+          ? () =>
+              fetch("/api/cards", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: w.id, ...body }),
+              })
+          : () =>
+              fetch(`/api/cards/${w.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+              })
+      );
+    }
+    // One queue step: different cards, so they can run together, but only
+    // after every earlier write has landed.
+    queueWrite(label, sends, plan.writes.map((w) => w.id));
   }
 
   function undo() {
-    const snap = historyRef.current.pop();
-    if (!snap) return;
-    recordAction("undo");
-    redoRef.current.push(snapshot());
-    applySnapshot(snap);
+    const step = historyRef.current.pop();
+    if (!step) return;
+    const plan = planUndo(step, cardsRef.current);
+    recordAction("undo", `${plan.writes.length} written, ${plan.skipped.length} skipped`);
+    if (plan.inverse) redoRef.current = pushBounded(redoRef.current, plan.inverse);
+    applyPlan(plan, "undo");
   }
 
   function redo() {
-    const snap = redoRef.current.pop();
-    if (!snap) return;
-    recordAction("redo");
-    historyRef.current.push(snapshot());
-    applySnapshot(snap);
+    const step = redoRef.current.pop();
+    if (!step) return;
+    const plan = planUndo(step, cardsRef.current);
+    recordAction("redo", `${plan.writes.length} written, ${plan.skipped.length} skipped`);
+    if (plan.inverse) historyRef.current = pushBounded(historyRef.current, plan.inverse);
+    applyPlan(plan, "redo");
   }
 
   useEffect(() => {
@@ -952,9 +951,7 @@ export default function Board() {
   );
 
   function handleDragStart(e: DragStartEvent) {
-    const redoBefore = redoRef.current;
-    pushHistory();
-    dragHistoryRef.current = { len: historyRef.current.length, redo: redoBefore };
+    dragBaseRef.current = { ...cardsRef.current };
     setTrayHover(false);
     // Drop any poll already in flight: its snapshot predates this drag, and
     // applying it mid-drag would move the card out from under dnd-kit.
@@ -1179,7 +1176,6 @@ export default function Board() {
   // Optimistic: the card appears (and is editable) instantly with a client-made
   // id; the POST runs in the background using that same id.
   function addCard(cellId: string) {
-    pushHistory();
     recordAction("card:add", cellId);
     const isTray = cellId === TRAY_ID;
     // Tray cards have no real column yet; default to the current half-month so
@@ -1209,6 +1205,7 @@ export default function Board() {
       tray: isTray,
     };
     if (isTray) setTrayOpen(true);
+    recordStep(cardsRef.current, { [card.id]: card }, [card.id]);
     setCardsById((p) => ({ ...p, [card.id]: card }));
     setItems((p) => ({ ...p, [cellId]: [...(p[cellId] ?? []), card.id] }));
     setEditingId(card.id);
@@ -1227,7 +1224,8 @@ export default function Board() {
   }
 
   function saveCard(id: string, patch: Partial<Card>) {
-    pushHistory();
+    const prev = cardsRef.current;
+    if (prev[id]) recordStep(prev, { [id]: { ...prev[id], ...patch } }, [id]);
     clearDraft(id);
     pendingRef.current[id] = { ...pendingRef.current[id], ...patch };
     setCardsById((p) => ({ ...p, [id]: { ...p[id], ...patch } }));
@@ -1281,7 +1279,7 @@ export default function Board() {
   }
 
   function deleteCard(id: string) {
-    pushHistory();
+    recordStep(cardsRef.current, {}, [id]);
     recordAction("card:delete", id);
     clearDraft(id);
     delete pendingRef.current[id];
@@ -1701,6 +1699,14 @@ export default function Board() {
 
       {showDeleted && <RecentlyDeleted onClose={() => setShowDeleted(false)} />}
       <SaveBanner problem={saveProblem} onDismiss={() => setSaveProblem(null)} />
+      {undoNotice && (
+        <div
+          role="status"
+          className="fixed bottom-4 left-1/2 z-[60] -translate-x-1/2 rounded-lg bg-slate-800 px-4 py-2 text-sm text-white shadow-lg"
+        >
+          {undoNotice}
+        </div>
+      )}
 
       {commentCard && (
         <CommentPopover
