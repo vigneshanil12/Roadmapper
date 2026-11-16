@@ -1,21 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
 import { requireRole } from "@/lib/auth";
+import { invalid, validateCard } from "@/lib/validate";
 import { actorFrom, softDeletePatch, stampUpdate } from "@/lib/safety";
-
-const FIELDS = [
-  "title",
-  "body",
-  "category",
-  "col_year",
-  "col_month",
-  "col_half",
-  "span",
-  "value",
-  "position",
-  "status",
-  "tray",
-] as const;
 
 export async function PATCH(
   req: NextRequest,
@@ -24,12 +11,9 @@ export async function PATCH(
   const auth = requireRole(req, "editor");
   if (auth instanceof Response) return auth;
   const { id } = await params;
-  const body = await req.json().catch(() => null);
-  if (!body || typeof body !== "object") {
-    return NextResponse.json({ error: "JSON body required" }, { status: 400 });
-  }
-  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  for (const f of FIELDS) if (f in body) patch[f] = body[f];
+  const v = validateCard(await req.json().catch(() => null), "patch");
+  if (!v.ok) return NextResponse.json(invalid(v), { status: 400 });
+  const patch: Record<string, unknown> = { ...v.value, updated_at: new Date().toISOString() };
 
   const sb = getServiceClient();
   const { data, error } = await sb
