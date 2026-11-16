@@ -16,6 +16,7 @@ const animateLayoutChanges: AnimateLayoutChanges = (args) =>
   defaultAnimateLayoutChanges({ ...args, wasDragging: true });
 import type { Card, CardStatus } from "@/lib/types";
 import { CATEGORY_MAP, type Category } from "@/lib/categories";
+import { LIMITS } from "@/lib/validate";
 
 // Value badge cycles through 0 → 1 → 2 → 3 → 0.
 export const VALUE_CYCLE = [0, 1, 2, 3];
@@ -510,6 +511,7 @@ function CardEditor({
         ref={titleRef}
         value={title}
         rows={1}
+        maxLength={LIMITS.titleMax}
         onChange={(e) => {
           setTitle(e.target.value);
           autosize(e.target);
@@ -531,6 +533,7 @@ function CardEditor({
         ref={bodyRef}
         value={body}
         rows={1}
+        maxLength={LIMITS.bodyMax}
         onChange={(e) => {
           setBody(e.target.value);
           autosize(e.target);

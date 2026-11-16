@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
 import { requireRole } from "@/lib/auth";
 import { actorFrom } from "@/lib/safety";
+import { invalid, validateCard, type CardFields } from "@/lib/validate";
 
 const MAX_UPDATES = 500;
 
@@ -19,16 +20,17 @@ export async function POST(req: NextRequest) {
   if (updates.length > MAX_UPDATES) {
     return NextResponse.json({ error: `max ${MAX_UPDATES} updates`, field: "updates" }, { status: 400 });
   }
+  const rows: CardFields[] = [];
   for (const u of updates) {
-    if (!u || typeof u !== "object" || typeof u.id !== "string" || !u.id) {
-      return NextResponse.json({ error: "each update needs an id", field: "id" }, { status: 400 });
-    }
+    const v = validateCard(u, "move");
+    if (!v.ok) return NextResponse.json(invalid(v), { status: 400 });
+    rows.push(v.value);
   }
   const sb = getServiceClient();
   const stamp = new Date().toISOString();
   const actor = actorFrom(req);
   const results = await Promise.all(
-    updates.map((u: Record<string, unknown>) =>
+    rows.map((u) =>
       sb
         .from("cards")
         .update({
@@ -37,11 +39,11 @@ export async function POST(req: NextRequest) {
           col_month: u.col_month,
           col_half: u.col_half,
           position: u.position,
-          tray: u.tray ?? false,
+          tray: u.tray,
           updated_at: stamp,
           updated_by: actor,
         })
-        .eq("id", u.id as string)
+        .eq("id", u.id!)
         .is("deleted_at", null)
         .select("id")
     )
@@ -49,7 +51,7 @@ export async function POST(req: NextRequest) {
   const failed: string[] = [];
   const skipped: string[] = [];
   results.forEach((r, i) => {
-    const id = updates[i].id as string;
+    const id = rows[i].id!;
     if (r.error) failed.push(id);
     else if (!r.data?.length) skipped.push(id);
   });

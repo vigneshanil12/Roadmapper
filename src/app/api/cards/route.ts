@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
 import { requireRole } from "@/lib/auth";
+import { invalid, validateCard } from "@/lib/validate";
 import { actorFrom, notDeleted, stampInsert, stampUpdate } from "@/lib/safety";
 
 export async function GET(req: NextRequest) {
@@ -18,26 +19,15 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const auth = requireRole(req, "editor");
   if (auth instanceof Response) return auth;
-  const body = await req.json();
+  const v = validateCard(await req.json().catch(() => null), "create");
+  if (!v.ok) return NextResponse.json(invalid(v), { status: 400 });
+  const { id, ...fields } = v.value;
   const actor = actorFrom(req);
   const sb = getServiceClient();
-  const fields = {
-    title: body.title ?? "",
-    body: body.body ?? "",
-    category: body.category,
-    col_year: body.col_year,
-    col_month: body.col_month,
-    col_half: body.col_half,
-    span: body.span ?? 1,
-    value: body.value ?? 0,
-    position: body.position ?? 0,
-    status: body.status ?? "normal",
-    tray: body.tray ?? false,
-  };
 
   // Undo of a delete re-posts the card with its old id. The row still exists
   // (soft-deleted), so revive it in place instead of inserting a duplicate id.
-  if (body.id) {
+  if (id) {
     const { data: revived, error: reviveError } = await sb
       .from("cards")
       .update(
@@ -46,7 +36,7 @@ export async function POST(req: NextRequest) {
           actor
         )
       )
-      .eq("id", body.id)
+      .eq("id", id)
       .not("deleted_at", "is", null)
       .select()
       .maybeSingle();
@@ -58,7 +48,7 @@ export async function POST(req: NextRequest) {
 
   const { data, error } = await sb
     .from("cards")
-    .insert(stampInsert({ ...(body.id ? { id: body.id } : {}), ...fields }, actor))
+    .insert(stampInsert({ ...(id ? { id } : {}), ...fields }, actor))
     .select()
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
