@@ -4,15 +4,49 @@ A FigJam-style roadmap board. Four colored category rows × half-month columns.
 Drag cards to snap into cells, double-click to add, toggle done/tentative.
 
 - **Categories** (fixed, colored): Growth & User Delight, Partner Convenience, New Features, Bugs
-- **Columns**: 9 months forward from the current month, each split into two halves (1–15, 16+). Scroll left to reach 6 past months.
+- **Columns**: from June 2026 (the history floor) to 11 months past the current month, each split into two halves (1–15, 16+).
 - **Card states**: normal · tentative (dashed border) · done (strikethrough). Cycle with the status button.
-- **Auth**: one shared password gate.
+- **Auth**: two shared passwords. Editors (Vignesh, Mrunal, Samyukta) can change the board; everyone else logs in as a view-only guest.
 
 ## Stack
 
 Next.js (App Router) · Tailwind · @dnd-kit · Supabase Postgres · deploy on Vercel.
 All DB access goes through Next server routes using the Supabase **service-role** key,
-gated by a password cookie. RLS is enabled with no policies, so the anon key can't read/write — only the server can.
+gated by a session cookie. RLS is enabled with no policies, so the anon key can't read/write — only the server can.
+
+## Auth layers
+
+1. **Proxy** (`src/proxy.ts`): pages without a valid `rm_auth` cookie redirect to
+   `/login`; API calls get `401 {"error":"Signed out"}` JSON (never a redirect,
+   so a lapsed session can't make a write look saved). Guests get 403 on card writes.
+2. **Every route checks again** (`requireRole(req, "editor" | "any")` in
+   `src/lib/auth.ts`, first line of every handler). Card writes, restores,
+   resolve-thread, Recently deleted, settings PUT and the crash list are
+   editor-only. Exempt: `/api/login`, `/api/logout`, `/api/health`, and
+   `/api/export` (own bearer token). `scripts/auth.test.mjs` fails the build's
+   tests if a handler skips the check.
+
+## Validation
+
+`src/lib/validate.ts` checks every card write (`POST /api/cards`,
+`PATCH /api/cards/[id]`, `POST /api/cards/batch`): category and status from the
+fixed lists, `col_month` 1–12, `col_half` 0/1, `col_year` 2026–2040, `value`
+0–3, `span` 1–96, `position` 0–10000, `tray` true/false, `id` a UUID, title ≤
+120 and body ≤ 2000 characters. Unknown fields are dropped. Invalid → `400
+{"error":"Invalid <field>: …","field":"<field>"}`. The same limits are CHECK
+constraints on `public.cards` (`supabase/migrations/20261116_r15_checks.sql`);
+change both together.
+
+## Saving and undo
+
+- Every card/comment write goes through `src/lib/write.ts`: the response is
+  checked, server errors retry twice, and a failure shows a banner — **Signed
+  out — log in again** or **Not saved: <action> · Retry**. Guests' browsers
+  never send card writes.
+- **Undo (⌘Z) / redo (⇧⌘Z)** work per step and only on the cards that step
+  touched (`src/lib/undo.ts`). If someone else changed one of those cards since,
+  undo leaves it alone and says so. Other people's cards are never touched by
+  your undo. Last 20 steps, this tab only.
 
 ## Local dev
 
@@ -22,7 +56,9 @@ cp .env.local.example .env.local   # fill in real values
 npm run dev
 ```
 
-Open http://localhost:3000 → enter the password from `APP_PASSWORD`.
+Open http://localhost:3000 → enter `APP_PASSWORD` (editor) or `APP_GUEST_PASSWORD` (guest). Note: local dev talks to the same Supabase project as production unless you point it elsewhere.
+
+Tests: `npm test` (node --test, no deps). Gate before merging: `npm test && npx tsc --noEmit && npm run build`.
 
 ## Environment variables
 
@@ -30,8 +66,13 @@ Open http://localhost:3000 → enter the password from `APP_PASSWORD`.
 | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase → Project Settings → API → Project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Project Settings → API → `service_role` secret |
-| `APP_PASSWORD` | Pick the shared password your team types to log in |
-| `APP_SESSION_SECRET` | Random string for the session cookie. `openssl rand -hex 32` |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase → API → `anon` key. Client-side only, for live cursors (Realtime Broadcast); RLS blocks table access |
+| `APP_PASSWORD` | Shared editor password |
+| `APP_GUEST_PASSWORD` | Shared view-only guest password |
+| `APP_SESSION_SECRET` | Editor session cookie value. `openssl rand -hex 32` |
+| `APP_GUEST_SESSION_SECRET` | Guest session cookie value. `openssl rand -hex 32` |
+| `GEMINI_API_KEY` | Google AI Studio key for the read-only planning assistant. Unset = assistant returns 503 |
+| `GEMINI_MODEL` | Optional model override for the assistant |
 | `EXPORT_TOKEN` | Bearer token for `GET /api/export` (nightly snapshot). `openssl rand -hex 32`. Unset = export always 401 |
 
 ## Supabase setup
@@ -96,6 +137,9 @@ Nothing on the board is hard-deleted by the app, and every change is recorded.
   `actor`, `changed_at`). Reorders within a cell (position-only updates) are skipped to
   save space; moves to another cell are kept. Because it's a trigger, it also
   catches edits made by hand in the SQL editor.
+- **The repo is private** (since 2026-11-16) because GitHub auto-disables
+  scheduled workflows on public repos after 60 days without activity, which
+  would silently stop the snapshot and the Supabase keepalive.
 - **Nightly snapshot.** `.github/workflows/snapshot.yml` calls `/api/export` at
   21:00 UTC and commits `snapshots/roadmap/<date>.json` to the private ops repo
   (`vigneshanil1297/urbanaut-agent-ops`) when something changed. The export
