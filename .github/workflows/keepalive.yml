@@ -1,13 +1,19 @@
 name: supabase-keepalive
 
-# Pings the app's /api/health route on a schedule so the free-tier Supabase
-# project keeps registering activity and does not auto-pause (7 idle days).
-# The repo is private on purpose: GitHub auto-disables scheduled workflows on
-# public repos after 60 days without activity (this job and snapshot.yml).
+# 1. Pings the app's /api/health route on a schedule so the free-tier Supabase
+#    project keeps registering activity and does not auto-pause (7 idle days).
+# 2. Re-enables this workflow and roadmap-snapshot every run. The repo is
+#    public, and GitHub auto-disables scheduled workflows on public repos after
+#    60 days without repository activity; calling the "enable workflow" API
+#    resets that clock. (Going private instead was tried on 2026-11-16: Vercel's
+#    Hobby plan then blocks deploys whose commit author isn't the linked account.)
 on:
   schedule:
     - cron: "0 6 * * *" # daily at 06:00 UTC
   workflow_dispatch: {} # allow manual runs from the Actions tab
+
+permissions:
+  actions: write # only for the enable calls below
 
 jobs:
   ping:
@@ -20,3 +26,12 @@ jobs:
           echo "HTTP $code"
           cat /tmp/body
           test "$code" = "200"
+
+      - name: Keep scheduled workflows enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for wf in keepalive.yml snapshot.yml; do
+            gh api -X PUT "repos/${{ github.repository }}/actions/workflows/$wf/enable"
+            echo "enabled $wf"
+          done
