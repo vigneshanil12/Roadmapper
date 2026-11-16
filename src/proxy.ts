@@ -1,15 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { AUTH_COOKIE, roleForToken } from "@/lib/auth";
 
-const AUTH_COOKIE = "rm_auth";
-
-// Derive role from which secret the cookie matches (not a tamperable field).
-function roleForToken(token: string | undefined): "editor" | "guest" | null {
-  if (!token) return null;
-  if (token === process.env.APP_SESSION_SECRET) return "editor";
-  if (token === process.env.APP_GUEST_SESSION_SECRET) return "guest";
-  return null;
-}
-
+// First auth layer. Every API route also calls requireRole() itself
+// (src/lib/auth.ts), so nothing depends on this proxy alone.
 // Gate everything except the login page, the login API, and static assets.
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;

@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
+import { requireRole } from "@/lib/auth";
 import { actorFrom, notDeleted, stampInsert, stampUpdate } from "@/lib/safety";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = requireRole(req, "any");
+  if (auth instanceof Response) return auth;
   const sb = getServiceClient();
   const { data, error } = await notDeleted(sb.from("cards").select("*")).order(
     "position",
@@ -13,6 +16,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = requireRole(req, "editor");
+  if (auth instanceof Response) return auth;
   const body = await req.json();
   const actor = actorFrom(req);
   const sb = getServiceClient();

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
 import { notDeleted } from "@/lib/safety";
-import { AUTH_COOKIE, roleForToken } from "@/lib/auth";
+import { requireRole } from "@/lib/auth";
 import { buildBoardSnapshot, systemPrompt } from "@/lib/assistant";
 import type { Card, Comment } from "@/lib/types";
 
@@ -40,8 +40,8 @@ async function callGemini(key: string, body: string): Promise<Response> {
 // context server-side every call, so the answer always reflects the current
 // roadmap.
 export async function POST(req: NextRequest) {
-  const role = roleForToken(req.cookies.get(AUTH_COOKIE)?.value);
-  if (!role) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = requireRole(req, "any");
+  if (auth instanceof Response) return auth;
 
   const key = process.env.GEMINI_API_KEY;
   if (!key) {

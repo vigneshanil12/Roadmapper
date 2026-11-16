@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
+import { requireRole } from "@/lib/auth";
 import { actorFrom } from "@/lib/safety";
 
 // Persist a set of cell/position changes after a drag, in one round trip.
 export async function POST(req: NextRequest) {
+  const auth = requireRole(req, "editor");
+  if (auth instanceof Response) return auth;
   const { updates } = await req.json();
   if (!Array.isArray(updates)) {
     return NextResponse.json({ error: "updates[] required" }, { status: 400 });

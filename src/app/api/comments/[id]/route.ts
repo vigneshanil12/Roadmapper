@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
-import { AUTH_COOKIE, NAME_COOKIE, roleForToken } from "@/lib/auth";
+import { NAME_COOKIE, requireRole } from "@/lib/auth";
 import { actorFrom, softDeletePatch } from "@/lib/safety";
 
 // Soft-delete a single comment. Editors can delete any; guests can delete only their
@@ -9,8 +9,9 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const role = roleForToken(req.cookies.get(AUTH_COOKIE)?.value);
-  if (!role) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = requireRole(req, "any");
+  if (auth instanceof Response) return auth;
+  const { role } = auth;
   const { id } = await params;
   const sb = getServiceClient();
 

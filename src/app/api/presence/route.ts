@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
+import { requireRole } from "@/lib/auth";
 
 // A session is "here" if it sent a heartbeat in the last 15s.
 const ACTIVE_WINDOW_MS = 15_000;
@@ -7,7 +8,9 @@ const ACTIVE_WINDOW_MS = 15_000;
 const STALE_MS = 60_000;
 
 // List sessions currently present.
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = requireRole(req, "any");
+  if (auth instanceof Response) return auth;
   const sb = getServiceClient();
   const since = new Date(Date.now() - ACTIVE_WINDOW_MS).toISOString();
   const { data, error } = await sb
@@ -21,6 +24,8 @@ export async function GET() {
 
 // Heartbeat: upsert this session's row with a fresh timestamp.
 export async function POST(req: NextRequest) {
+  const auth = requireRole(req, "any");
+  if (auth instanceof Response) return auth;
   const { id, name, color } = await req.json().catch(() => ({}));
   if (!id || !name || !color) {
     return NextResponse.json({ error: "id, name, color required" }, { status: 400 });
@@ -41,6 +46,8 @@ export async function POST(req: NextRequest) {
 
 // Explicit leave (sent on tab close via sendBeacon / logout).
 export async function DELETE(req: NextRequest) {
+  const auth = requireRole(req, "any");
+  if (auth instanceof Response) return auth;
   const { id } = await req.json().catch(() => ({}));
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
   const sb = getServiceClient();

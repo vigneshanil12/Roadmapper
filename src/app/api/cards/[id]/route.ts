@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
+import { requireRole } from "@/lib/auth";
 import { actorFrom, softDeletePatch, stampUpdate } from "@/lib/safety";
 
 const FIELDS = [
@@ -20,6 +21,8 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = requireRole(req, "editor");
+  if (auth instanceof Response) return auth;
   const { id } = await params;
   const body = await req.json();
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -42,6 +45,8 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = requireRole(req, "editor");
+  if (auth instanceof Response) return auth;
   const { id } = await params;
   const sb = getServiceClient();
   const { error } = await sb

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
-import { AUTH_COOKIE, roleForToken } from "@/lib/auth";
+import { requireRole } from "@/lib/auth";
 import { actorFrom, restorePatch } from "@/lib/safety";
 
 // Editor-only: bring a soft-deleted card back. Its comments were never touched
@@ -9,10 +9,8 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const role = roleForToken(req.cookies.get(AUTH_COOKIE)?.value);
-  if (role !== "editor") {
-    return NextResponse.json({ error: "Editors only" }, { status: 403 });
-  }
+  const auth = requireRole(req, "editor");
+  if (auth instanceof Response) return auth;
   const { id } = await params;
   const sb = getServiceClient();
   const { data, error } = await sb

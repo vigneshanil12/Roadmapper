@@ -35,6 +35,27 @@ export function roleForToken(token: string | undefined): Role | null {
   return null;
 }
 
+type CookieSource = {
+  cookies: { get(name: string): { value: string } | undefined };
+};
+
+// In-route auth, called first in every API handler (except login, logout,
+// health and the bearer-token export). The proxy checks too, but routes must
+// not depend on it: a proxy bypass would otherwise hand the service-role key
+// to anyone. Returns the caller's role, or a ready-made 401/403 response.
+// Uses the web `Response` so this file stays import-free for `npm test`.
+export function requireRole(
+  req: CookieSource,
+  need: "editor" | "any"
+): { role: Role } | Response {
+  const role = roleForToken(req.cookies.get(AUTH_COOKIE)?.value);
+  if (!role) return Response.json({ error: "Signed out" }, { status: 401 });
+  if (need === "editor" && role !== "editor") {
+    return Response.json({ error: "Editors only" }, { status: 403 });
+  }
+  return { role };
+}
+
 export function isValidEditorPassword(input: string): boolean {
   const pw = process.env.APP_PASSWORD;
   return !!pw && input === pw;
