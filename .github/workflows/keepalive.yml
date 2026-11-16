@@ -2,6 +2,8 @@ name: supabase-keepalive
 
 # Pings the app's /api/health route on a schedule so the free-tier Supabase
 # project keeps registering activity and does not auto-pause (7 idle days).
+# The repo is private on purpose: GitHub auto-disables scheduled workflows on
+# public repos after 60 days without activity (this job and snapshot.yml).
 on:
   schedule:
     - cron: "0 6 * * *" # daily at 06:00 UTC
