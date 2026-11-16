@@ -21,6 +21,11 @@ export function proxy(req: NextRequest) {
 
   const role = roleForToken(req.cookies.get(AUTH_COOKIE)?.value);
   if (!role) {
+    // API callers get JSON, never a redirect: fetch() follows a redirect to the
+    // login page, gets HTML with a 200, and a write would look saved.
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "Signed out" }, { status: 401 });
+    }
     const url = req.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);

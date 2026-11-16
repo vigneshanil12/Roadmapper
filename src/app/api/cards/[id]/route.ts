@@ -24,7 +24,10 @@ export async function PATCH(
   const auth = requireRole(req, "editor");
   if (auth instanceof Response) return auth;
   const { id } = await params;
-  const body = await req.json();
+  const body = await req.json().catch(() => null);
+  if (!body || typeof body !== "object") {
+    return NextResponse.json({ error: "JSON body required" }, { status: 400 });
+  }
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
   for (const f of FIELDS) if (f in body) patch[f] = body[f];
 
@@ -33,9 +36,12 @@ export async function PATCH(
     .from("cards")
     .update(stampUpdate(patch, actorFrom(req)))
     .eq("id", id)
+    // Never edit (or implicitly revive) a soft-deleted card.
+    .is("deleted_at", null)
     .select()
-    .single();
+    .maybeSingle();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (!data) return NextResponse.json({ error: "Card not found (deleted?)" }, { status: 404 });
   return NextResponse.json({ card: data });
 }
 

@@ -38,6 +38,8 @@ import Tray from "./Tray";
 import CommentPopover from "./CommentPopover";
 import AssistantPanel from "./AssistantPanel";
 import RecentlyDeleted from "./RecentlyDeleted";
+import SaveBanner, { type SaveProblem } from "./SaveBanner";
+import { isSignedOut, sendWrite } from "@/lib/write";
 
 const LABEL_W = 168;
 const COL_W = 224;
@@ -171,8 +173,8 @@ export default function Board() {
   const deletedIdsRef = useRef<Set<string>>(new Set());
   const loadComments = useCallback(() => {
     fetch("/api/comments")
-      .then((r) => r.json())
-      .then(({ comments }: { comments: Comment[] }) => {
+      .then((r) => (isSignedOut(r) ? { comments: null } : r.json()))
+      .then(({ comments }: { comments: Comment[] | null }) => {
         if (!comments) return;
         const pending = deletedIdsRef.current;
         const present = new Set(comments.map((c) => c.id));
@@ -207,31 +209,59 @@ export default function Board() {
       created_at: new Date().toISOString(),
     };
     setComments((p) => [...p, optimistic]);
-    fetch("/api/comments", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ card_id: cardId, body, name: me.name, color: me.color }),
-    })
-      .then(() => loadComments())
-      .catch(() => {});
+    commentWrite("posting a comment", () =>
+      fetch("/api/comments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ card_id: cardId, body, name: me.name, color: me.color }),
+      })
+    );
+  }
+
+  // Comment writes don't share the card queue, but get the same checks: a
+  // failure shows the save banner (with Retry) and the next load shows the
+  // server's truth (the optimistic comment disappears, a "deleted" one returns).
+  function commentWrite(label: string, send: () => Promise<Response>, hiddenIds: string[] = []) {
+    sendWrite(send)
+      .then((o) => {
+        if (o.kind !== "ok") {
+          for (const id of hiddenIds) deletedIdsRef.current.delete(id);
+          recordAction("write:failed", `${label} ${o.kind} ${o.status}`);
+          setSaveProblem(
+            o.kind === "signed-out"
+              ? { kind: "signed-out" }
+              : {
+                  kind: "failed",
+                  label,
+                  error: o.error,
+                  retry: () => {
+                    setSaveProblem(null);
+                    for (const id of hiddenIds) deletedIdsRef.current.add(id);
+                    commentWrite(label, send, hiddenIds);
+                  },
+                }
+          );
+        }
+        loadComments();
+      })
+      .catch((e) => reportCrash(e));
   }
 
   function deleteComment(commentId: string) {
     setComments((p) => p.filter((c) => c.id !== commentId));
     if (commentId.startsWith("tmp-")) return;
     deletedIdsRef.current.add(commentId);
-    fetch(`/api/comments/${commentId}`, { method: "DELETE" })
-      .then(() => loadComments())
-      .catch(() => {});
+    commentWrite("deleting a comment", () => fetch(`/api/comments/${commentId}`, { method: "DELETE" }), [
+      commentId,
+    ]);
   }
 
   function resolveThread(cardId: string) {
-    for (const c of comments) if (c.card_id === cardId) deletedIdsRef.current.add(c.id);
+    const ids = comments.filter((c) => c.card_id === cardId).map((c) => c.id);
+    for (const id of ids) deletedIdsRef.current.add(id);
     setComments((p) => p.filter((c) => c.card_id !== cardId));
     setCommentCard(null);
-    fetch(`/api/comments?card_id=${cardId}`, { method: "DELETE" })
-      .then(() => loadComments())
-      .catch(() => {});
+    commentWrite("resolving a thread", () => fetch(`/api/comments?card_id=${cardId}`, { method: "DELETE" }), ids);
   }
 
   // Search + filter. A card "matches" when it passes the text query and any
@@ -346,8 +376,8 @@ export default function Board() {
   useEffect(() => {
     let alive = true;
     fetch("/api/cards")
-      .then((r) => r.json())
-      .then(({ cards }: { cards: Card[] }) => {
+      .then((r) => (readSignedOut(r) ? { cards: null } : r.json()))
+      .then(({ cards }: { cards: Card[] | null }) => {
         if (!alive) return;
         // A transient API error returns no array; bail rather than crash the
         // board on `for (const c of cards)`.
@@ -397,15 +427,44 @@ export default function Board() {
   // The poll uses them to drop snapshots that can't include our latest writes.
   const writesInFlightRef = useRef(0);
   const writeSeqRef = useRef(0);
-  function queueWrite(send: () => Promise<unknown>) {
+  // Every send goes through sendWrite (src/lib/write.ts), which checks the
+  // response, retries server errors briefly, and spots a lapsed session. A
+  // failure shows the save banner and drops the cards' pendingRef entries so
+  // the next poll shows what the server really holds instead of the unsaved
+  // local copy.
+  function queueWrite(label: string, sends: Array<() => Promise<Response>>, cardIds: string[] = []) {
     writeSeqRef.current++;
     writesInFlightRef.current++;
     writeChainRef.current = writeChainRef.current
-      .then(send)
-      .catch(() => {})
+      .then(async () => {
+        const outcomes = await Promise.all(sends.map((s) => sendWrite(s)));
+        const bad = outcomes.find((o) => o.kind === "signed-out") ?? outcomes.find((o) => o.kind === "failed");
+        if (!bad) return;
+        for (const id of cardIds) delete pendingRef.current[id];
+        recordAction("write:failed", `${label} ${bad.kind} ${bad.status}`);
+        if (bad.kind === "signed-out") setSaveProblem({ kind: "signed-out" });
+        else
+          setSaveProblem({
+            kind: "failed",
+            label,
+            error: bad.error,
+            retry: () => {
+              setSaveProblem(null);
+              queueWrite(label, sends, cardIds);
+            },
+          });
+      })
+      .catch((e) => reportCrash(e))
       .finally(() => {
         writesInFlightRef.current--;
       });
+  }
+  const [saveProblem, setSaveProblem] = useState<SaveProblem | null>(null);
+  // A read (load / poll) that came back signed out: show the banner, skip.
+  function readSignedOut(r: Response): boolean {
+    if (!isSignedOut(r)) return false;
+    setSaveProblem({ kind: "signed-out" });
+    return true;
   }
 
   useEffect(() => {
@@ -418,8 +477,8 @@ export default function Board() {
       const ctrl = new AbortController();
       pollAbortRef.current = ctrl;
       fetch("/api/cards", { signal: ctrl.signal })
-        .then((r) => r.json())
-        .then(({ cards }: { cards: Card[] }) => {
+        .then((r) => (readSignedOut(r) ? { cards: null } : r.json()))
+        .then(({ cards }: { cards: Card[] | null }) => {
           // Re-check via refs, not the closure: the user may have started
           // dragging/editing after this fetch went out, in which case the
           // captured activeId/editingId are still null and would let a stale
@@ -494,7 +553,7 @@ export default function Board() {
     };
     const pull = () => {
       fetch("/api/presence")
-        .then((r) => r.json())
+        .then((r) => (readSignedOut(r) ? { users: null } : r.json()))
         .then(({ users }: { users: PresenceUser[] }) => {
           if (alive && users) setPresence(users);
         })
@@ -624,7 +683,9 @@ export default function Board() {
 
   // Persist layout (cell + position) whenever items settle after a drag.
   useEffect(() => {
-    if (!loaded || activeId) return;
+    // Guests are view-only: their browsers never send card writes (the server
+    // would 403 them anyway, and the banner would then nag a viewer).
+    if (!loaded || activeId || !isEditor) return;
     const updates: Array<Record<string, unknown>> = [];
     const next = { ...cardsRef.current };
     for (const key of Object.keys(items)) {
@@ -692,15 +753,20 @@ export default function Board() {
     if (updates.length) {
       recordAction("persist:layout", `${updates.length} cards`);
       setCardsById(next);
-      queueWrite(() =>
-        fetch("/api/cards/batch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ updates }),
-        })
+      queueWrite(
+        updates.length === 1 ? "moving a card" : `moving ${updates.length} cards`,
+        [
+          () =>
+            fetch("/api/cards/batch", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ updates }),
+            }),
+        ],
+        updates.map((u) => u.id as string)
       );
     }
-  }, [items, activeId, loaded]);
+  }, [items, activeId, loaded, isEditor]);
 
   // Push the server back to a restored snapshot: recreate cards that were
   // deleted, delete cards that were added, PATCH the ones that changed.
@@ -721,7 +787,7 @@ export default function Board() {
       status: c.status,
       tray: c.tray,
     });
-    const sends: Array<() => Promise<unknown>> = [];
+    const sends: Array<() => Promise<Response>> = [];
     for (const id in snap) {
       if (!live[id]) {
         sends.push(() =>
@@ -746,7 +812,7 @@ export default function Board() {
     }
     // One queue step: these touch different cards so they can run together,
     // but only after every earlier write has landed.
-    if (sends.length) queueWrite(() => Promise.all(sends.map((send) => send())));
+    if (sends.length) queueWrite("undo/redo", sends, [...new Set([...Object.keys(snap), ...Object.keys(live)])]);
   }
 
   function applySnapshot(snap: Snapshot) {
@@ -1146,12 +1212,17 @@ export default function Board() {
     setCardsById((p) => ({ ...p, [card.id]: card }));
     setItems((p) => ({ ...p, [cellId]: [...(p[cellId] ?? []), card.id] }));
     setEditingId(card.id);
-    queueWrite(() =>
-      fetch("/api/cards", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(card),
-      })
+    queueWrite(
+      "adding a card",
+      [
+        () =>
+          fetch("/api/cards", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(card),
+          }),
+      ],
+      [card.id]
     );
   }
 
@@ -1161,12 +1232,17 @@ export default function Board() {
     pendingRef.current[id] = { ...pendingRef.current[id], ...patch };
     setCardsById((p) => ({ ...p, [id]: { ...p[id], ...patch } }));
     setEditingId((e) => (e === id ? null : e));
-    queueWrite(() =>
-      fetch(`/api/cards/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      })
+    queueWrite(
+      `editing "${(cardsRef.current[id]?.title || "a card").slice(0, 40)}"`,
+      [
+        () =>
+          fetch(`/api/cards/${id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(patch),
+          }),
+      ],
+      [id]
     );
   }
 
@@ -1220,7 +1296,11 @@ export default function Board() {
       for (const k of Object.keys(p)) n[k] = p[k].filter((x) => x !== id);
       return n;
     });
-    queueWrite(() => fetch(`/api/cards/${id}`, { method: "DELETE" }));
+    queueWrite(
+      `deleting "${(cardsRef.current[id]?.title || "a card").slice(0, 40)}"`,
+      [() => fetch(`/api/cards/${id}`, { method: "DELETE" })],
+      [id]
+    );
   }
 
   function resizeCard(id: string, span: number) {
@@ -1620,6 +1700,7 @@ export default function Board() {
       )}
 
       {showDeleted && <RecentlyDeleted onClose={() => setShowDeleted(false)} />}
+      <SaveBanner problem={saveProblem} onDismiss={() => setSaveProblem(null)} />
 
       {commentCard && (
         <CommentPopover
