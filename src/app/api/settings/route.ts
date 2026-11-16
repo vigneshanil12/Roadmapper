@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
-import { AUTH_COOKIE, roleForToken } from "@/lib/auth";
+import { requireRole } from "@/lib/auth";
 import { actorFrom } from "@/lib/safety";
 
 // Shared app settings, currently just the AI assistant's product context. Single
 // row (id = 1) so the context is set once and shared across all editors.
 export async function GET(req: NextRequest) {
-  const role = roleForToken(req.cookies.get(AUTH_COOKIE)?.value);
-  if (!role) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = requireRole(req, "any");
+  if (auth instanceof Response) return auth;
 
   const sb = getServiceClient();
   const { data, error } = await sb
@@ -22,10 +22,8 @@ export async function GET(req: NextRequest) {
 // Editor-only: the context steers everyone's assistant answers, so guests can't
 // rewrite it.
 export async function PUT(req: NextRequest) {
-  const role = roleForToken(req.cookies.get(AUTH_COOKIE)?.value);
-  if (role !== "editor") {
-    return NextResponse.json({ error: "Editors only" }, { status: 403 });
-  }
+  const auth = requireRole(req, "editor");
+  if (auth instanceof Response) return auth;
   const { product_context } = await req.json().catch(() => ({}));
   const sb = getServiceClient();
   const { error } = await sb.from("settings").upsert({

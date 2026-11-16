@@ -1,16 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient } from "@/lib/supabase";
-import { AUTH_COOKIE, roleForToken } from "@/lib/auth";
+import { requireRole } from "@/lib/auth";
 import { deletedSince } from "@/lib/safety";
 
 // Editor-only: cards and comments soft-deleted in the last 30 days, newest
 // first, for the "Recently deleted" panel. Older ones are still in the table
 // and in row_history; restore those by SQL (see README → Data safety).
 export async function GET(req: NextRequest) {
-  const role = roleForToken(req.cookies.get(AUTH_COOKIE)?.value);
-  if (role !== "editor") {
-    return NextResponse.json({ error: "Editors only" }, { status: 403 });
-  }
+  const auth = requireRole(req, "editor");
+  if (auth instanceof Response) return auth;
   const since = deletedSince();
   const sb = getServiceClient();
   const [cardsRes, commentsRes] = await Promise.all([
