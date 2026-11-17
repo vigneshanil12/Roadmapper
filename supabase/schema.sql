@@ -57,6 +57,24 @@ begin
 end
 $$;
 
+-- R2 card ↔ Jira link (see migrations/20261117_r2_jira_keys.sql).
+alter table public.cards add column if not exists jira_keys text[] not null default '{}';
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'cards_jira_keys_chk' and conrelid = 'public.cards'::regclass
+  ) then
+    alter table public.cards add constraint cards_jira_keys_chk check (
+      cardinality(jira_keys) <= 20
+      and array_position(jira_keys, null) is null
+      and array_to_string(jira_keys, ',') ~ '^(URBN-[0-9]+(,URBN-[0-9]+)*)?$'
+    ) not valid;
+  end if;
+  alter table public.cards validate constraint cards_jira_keys_chk;
+end
+$$;
+
 create index if not exists cards_cell_idx
   on public.cards (category, col_year, col_month, col_half, position);
 

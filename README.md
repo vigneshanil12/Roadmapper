@@ -32,10 +32,11 @@ gated by a session cookie. RLS is enabled with no policies, so the anon key can'
 `PATCH /api/cards/[id]`, `POST /api/cards/batch`): category and status from the
 fixed lists, `col_month` 1–12, `col_half` 0/1, `col_year` 2026–2040, `value`
 0–3, `span` 1–96, `position` 0–10000, `tray` true/false, `id` a UUID, title ≤
-120 and body ≤ 2000 characters. Unknown fields are dropped. Invalid → `400
+120 and body ≤ 2000 characters, `jira_keys` ≤ 20 keys each `URBN-<n>`
+(trimmed, upper-cased, de-duplicated first). Unknown fields are dropped. Invalid → `400
 {"error":"Invalid <field>: …","field":"<field>"}`. The same limits are CHECK
-constraints on `public.cards` (`supabase/migrations/20261116_r15_checks.sql`);
-change both together.
+constraints on `public.cards` (`supabase/migrations/20261116_r15_checks.sql`,
+`20261117_r2_jira_keys.sql`); change both together.
 
 ## Saving and undo
 
@@ -99,6 +100,7 @@ To change the password later: update `APP_PASSWORD` in Vercel env vars → redep
 - **Add**: double-click empty space in any cell, or hover a cell → "+ add". Type a bold title and bullet lines (one per line), Enter to save.
 - **Move**: drag a card; it snaps into the target cell and stacks. Drag within a cell to reorder.
 - **Edit**: double-click a card, or hover → ✎.
+- **Jira links**: in the card editor, type ticket keys in the small `Jira:` field (`URBN-12, URBN-40`). They show as chips on the card and open the ticket in Jira. Agents use them to compare the roadmap with Jira (drift report in the ops repo); guests see the chips but can't edit.
 - **Status**: hover → ○ button cycles normal → tentative (dashed) → done (strikethrough).
 - **Delete**: hover → ✕. Deletes are soft — editors can bring cards and comments back from **Recently deleted** in the header (last 30 days).
 
@@ -194,6 +196,8 @@ a snapshot without checking `row_history` for changes made after it.
 `Authorization: Bearer $EXPORT_TOKEN`. Returns
 `{ schema: "roadmapper-export/1", exported_at, counts: { cards, cards_deleted,
 comments, comments_deleted, settings }, cards[], comments[], settings[] }`,
-full rows including `deleted_at`, `created_by`, `updated_by`. Agents (R2) read
+full rows including `deleted_at`, `created_by`, `updated_by`, `jira_keys`
+(text[], `[]` = none; added 2026-11-17, still `/1` because adding a field
+doesn't break readers). Agents (R2) read
 the snapshots, never this route directly. Bump `schema` on any breaking change.
 

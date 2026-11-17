@@ -7,7 +7,7 @@ import { buildStep, planUndo, buildItems, pushBounded, payload, MAX_STEPS } from
 
 const card = (id, over = {}) => ({
   id, title: id.toUpperCase(), body: "", category: "features",
-  col_year: 2026, col_month: 12, col_half: 0, span: 1, value: 0, position: 0, status: "normal", tray: false,
+  col_year: 2026, col_month: 12, col_half: 0, span: 1, value: 0, position: 0, status: "normal", tray: false, jira_keys: [],
   ...over,
 });
 const board = (...cs) => Object.fromEntries(cs.map((c) => [c.id, c]));
@@ -197,6 +197,17 @@ test("buildItems groups by cell, tray separate, ordered by position", () => {
 
 test("payload carries only card fields", () => {
   assert.deepEqual(Object.keys(payload({ ...card("a"), created_by: "x", updated_at: "y" })).sort(), [
-    "body", "category", "col_half", "col_month", "col_year", "position", "span", "status", "title", "tray", "value",
+    "body", "category", "col_half", "col_month", "col_year", "jira_keys", "position", "span", "status", "title", "tray", "value",
   ]);
+});
+
+test("jira_keys edits are undoable and conflict-checked by value", () => {
+  const a = card("a");
+  const linked = { ...a, jira_keys: ["URBN-1"] };
+  roundTrip(board(a), board(linked), ["a"]);
+  const step = buildStep(board(a), board(linked), ["a"]);
+  // Same keys, new array instance: still "unchanged since", so undo applies.
+  assert.deepEqual(planUndo(step, board({ ...linked, jira_keys: ["URBN-1"] })).skipped, []);
+  // Someone else changed the links since: skipped.
+  assert.deepEqual(planUndo(step, board({ ...linked, jira_keys: ["URBN-2"] })).skipped, ["a"]);
 });

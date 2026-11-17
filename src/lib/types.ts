@@ -14,6 +14,7 @@ export interface Card {
   position: number;
   status: CardStatus;
   tray: boolean; // true = parked in the staging tray; col_* ignored
+  jira_keys: string[]; // linked URBN tickets, e.g. ["URBN-2266"]; [] = none
 }
 
 export type NewCard = Omit<Card, "id">;

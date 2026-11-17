@@ -16,7 +16,9 @@ const animateLayoutChanges: AnimateLayoutChanges = (args) =>
   defaultAnimateLayoutChanges({ ...args, wasDragging: true });
 import type { Card, CardStatus } from "@/lib/types";
 import { CATEGORY_MAP, type Category } from "@/lib/categories";
-import { LIMITS } from "@/lib/validate";
+import { LIMITS, parseJiraKeys } from "@/lib/validate";
+
+const JIRA_BROWSE = "https://urbanaut.atlassian.net/browse/";
 
 // Value badge cycles through 0 → 1 → 2 → 3 → 0.
 export const VALUE_CYCLE = [0, 1, 2, 3];
@@ -249,6 +251,7 @@ export default function CardItem({
               ))}
             </ul>
           )}
+          {(card.jira_keys?.length ?? 0) > 0 && <JiraChips keys={card.jira_keys} />}
           {!shownTitle && bullets.length === 0 && (
             <span className="italic text-slate-500">Empty — double-click</span>
           )}
@@ -297,6 +300,31 @@ export default function CardItem({
           <div className="absolute right-0.5 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded bg-black/25" />
         </div>
       )}
+    </div>
+  );
+}
+
+// Linked Jira tickets as small chips. Links open in a new tab; pointer events
+// stop here so clicking a chip never starts a drag, select or edit. Shown to
+// guests too (read-only either way; links are edited in the card editor).
+function JiraChips({ keys }: { keys: string[] }) {
+  return (
+    <div className="mt-1 flex flex-wrap gap-0.5">
+      {keys.map((k) => (
+        <a
+          key={k}
+          href={`${JIRA_BROWSE}${k}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={`Open ${k} in Jira`}
+          onPointerDown={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          className="rounded bg-white/70 px-1 py-px font-mono text-[9.5px] font-medium leading-tight text-slate-700 ring-1 ring-black/10 hover:bg-white hover:text-sky-700"
+        >
+          {k}
+        </a>
+      ))}
     </div>
   );
 }
@@ -438,6 +466,11 @@ function stripBullets(text: string): string {
     .join("\n");
 }
 
+// Keys the server will accept, for the click-away path (no error UI there).
+function validKeys(text: string): string[] {
+  return parseJiraKeys(text).filter((k) => /^URBN-[0-9]+$/.test(k)).slice(0, LIMITS.jiraKeysMax);
+}
+
 function CardEditor({
   card,
   draft,
@@ -457,12 +490,14 @@ function CardEditor({
   const initBody = draft ? draft.body : card.body;
   const [title, setTitle] = useState(initTitle);
   const [body, setBody] = useState(withBullets(initBody));
+  const savedKeys = (card.jira_keys ?? []).join(", ");
+  const [jira, setJira] = useState(savedKeys);
   const rootRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   // Latest values for the outside-click handler, which runs once on mount.
-  const valsRef = useRef({ title, body });
-  valsRef.current = { title, body };
+  const valsRef = useRef({ title, body, jira });
+  valsRef.current = { title, body, jira };
 
   // Grow textareas to fit content so editing sits exactly where the text shows.
   function autosize(el: HTMLTextAreaElement | null) {
@@ -487,15 +522,25 @@ function CardEditor({
     if (!onDraft) return;
     function onDown(e: PointerEvent) {
       if (rootRef.current?.contains(e.target as Node)) return;
-      const { title, body } = valsRef.current;
+      const { title, body, jira } = valsRef.current;
+      // Drafts hold title/body only. A changed link list is saved right away
+      // instead of being dropped (no silent loss); invalid keys are filtered.
+      const keys = validKeys(jira);
+      if (keys.join(",") !== (card.jira_keys ?? []).join(",")) onSave(card.id, { jira_keys: keys });
       onDraft!(card.id, { title: title.trim(), body: stripBullets(body) });
     }
     document.addEventListener("pointerdown", onDown, true);
     return () => document.removeEventListener("pointerdown", onDown, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card.id, onDraft]);
 
+  const parsed = parseJiraKeys(jira);
+  const badKey = parsed.find((k) => !/^URBN-[0-9]+$/.test(k));
   function save() {
-    onSave(card.id, { title: title.trim(), body: stripBullets(body) });
+    if (badKey || parsed.length > LIMITS.jiraKeysMax) return;
+    const patch: Partial<Card> = { title: title.trim(), body: stripBullets(body) };
+    if (parsed.join(",") !== (card.jira_keys ?? []).join(",")) patch.jira_keys = parsed;
+    onSave(card.id, patch);
   }
 
   return (
@@ -558,6 +603,29 @@ function CardEditor({
           done ? "line-through" : ""
         }`}
       />
+      {/* Linked Jira tickets — comma or space separated, e.g. "URBN-12, URBN-40". */}
+      <input
+        value={jira}
+        onChange={(e) => setJira(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            save();
+          }
+          if (e.key === "Escape") onCancel(card.id);
+        }}
+        placeholder="Jira: URBN-123, URBN-456"
+        aria-label="Linked Jira tickets"
+        className={`mt-1 w-full rounded bg-white/60 px-1 py-0.5 font-mono text-[10px] outline-none ring-1 placeholder:font-sans placeholder:italic placeholder:text-slate-400 ${
+          badKey ? "ring-red-400" : "ring-black/10 focus:ring-sky-400"
+        }`}
+      />
+      {badKey && (
+        <div className="mt-0.5 text-[10px] text-red-600">&quot;{badKey}&quot; isn&apos;t a URBN-number key</div>
+      )}
+      {parsed.length > LIMITS.jiraKeysMax && (
+        <div className="mt-0.5 text-[10px] text-red-600">Max {LIMITS.jiraKeysMax} tickets</div>
+      )}
       <div className="mt-1 flex justify-end gap-1">
         <button
           onClick={() => onCancel(card.id)}
@@ -567,7 +635,8 @@ function CardEditor({
         </button>
         <button
           onClick={save}
-          className="rounded bg-slate-900 px-2 py-0.5 text-[11px] font-medium text-white"
+          disabled={!!badKey || parsed.length > LIMITS.jiraKeysMax}
+          className="rounded bg-slate-900 px-2 py-0.5 text-[11px] font-medium text-white disabled:opacity-40"
         >
           Save
         </button>

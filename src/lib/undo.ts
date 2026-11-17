@@ -20,6 +20,7 @@ export type UndoCard = {
   position: number;
   status: string;
   tray: boolean;
+  jira_keys?: string[]; // optional so pre-R2 rows (and tests) without it compare as []
 };
 
 export type Change<C extends UndoCard = UndoCard> = { id: string; before: C | null; after: C | null };
@@ -34,23 +35,29 @@ export const MAX_STEPS = 20;
 
 // Fields that are the card's content. Position is written back but ignored for
 // conflict checks: it shifts whenever anyone reorders the same cell.
-const CONTENT = ["title", "body", "category", "col_year", "col_month", "col_half", "span", "value", "status", "tray"] as const;
+const CONTENT = ["title", "body", "category", "col_year", "col_month", "col_half", "span", "value", "status", "tray", "jira_keys"] as const;
 export const PAYLOAD = [...CONTENT, "position"] as const;
+
+// jira_keys is an array: compare by value, missing = [].
+function same(a: UndoCard, b: UndoCard, k: (typeof PAYLOAD)[number]): boolean {
+  if (k === "jira_keys") return (a.jira_keys ?? []).join(",") === (b.jira_keys ?? []).join(",");
+  return a[k] === b[k];
+}
 
 export function payload<C extends UndoCard>(c: C): Omit<UndoCard, "id"> {
   const out: Record<string, unknown> = {};
-  for (const k of PAYLOAD) out[k] = c[k];
+  for (const k of PAYLOAD) out[k] = k === "jira_keys" ? [...(c.jira_keys ?? [])] : c[k];
   return out as Omit<UndoCard, "id">;
 }
 
 export function sameContent(a: UndoCard | null | undefined, b: UndoCard | null | undefined): boolean {
   if (!a || !b) return !a && !b;
-  return CONTENT.every((k) => a[k] === b[k]);
+  return CONTENT.every((k) => same(a, b, k));
 }
 
 function samePayload(a: UndoCard | null | undefined, b: UndoCard | null | undefined): boolean {
   if (!a || !b) return !a && !b;
-  return PAYLOAD.every((k) => a[k] === b[k]);
+  return PAYLOAD.every((k) => same(a, b, k));
 }
 
 // Build a step from the cards map before the action and after it, limited to

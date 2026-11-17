@@ -1203,6 +1203,7 @@ export default function Board() {
       position,
       status: "normal",
       tray: isTray,
+      jira_keys: [],
     };
     if (isTray) setTrayOpen(true);
     recordStep(cardsRef.current, { [card.id]: card }, [card.id]);

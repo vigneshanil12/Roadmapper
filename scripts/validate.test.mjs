@@ -4,12 +4,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
-import { validateCard, invalid, CATEGORY_IDS, CARD_STATUSES, LIMITS } from "../src/lib/validate.ts";
+import { validateCard, invalid, parseJiraKeys, CATEGORY_IDS, CARD_STATUSES, LIMITS } from "../src/lib/validate.ts";
 
 const ID = "3f2a1c4e-5b6d-4e7f-8a9b-0c1d2e3f4a5b";
 const card = {
   id: ID, title: "Partner portal v2", body: "line one\nline two", category: "partner",
-  col_year: 2026, col_month: 12, col_half: 1, span: 2, value: 3, position: 0, status: "tentative", tray: false,
+  col_year: 2026, col_month: 12, col_half: 1, span: 2, value: 3, position: 0, status: "tentative", tray: false, jira_keys: ["URBN-2266"],
 };
 
 test("a real card passes create and is returned unchanged", () => {
@@ -22,7 +22,7 @@ test("create fills defaults and needs the cell", () => {
   const v = validateCard({ category: "bugs", col_year: 2027, col_month: 1, col_half: 0 }, "create");
   assert.deepEqual(v, {
     ok: true,
-    value: { title: "", body: "", category: "bugs", col_year: 2027, col_month: 1, col_half: 0, span: 1, value: 0, position: 0, status: "normal", tray: false },
+    value: { title: "", body: "", category: "bugs", col_year: 2027, col_month: 1, col_half: 0, span: 1, value: 0, position: 0, status: "normal", tray: false, jira_keys: [] },
   });
   const missing = validateCard({ category: "bugs", col_year: 2027, col_half: 0 }, "create");
   assert.deepEqual(missing, { ok: false, field: "col_month", error: "required" });
@@ -95,4 +95,30 @@ test("every card in the latest ops snapshot passes", (t) => {
     const v = validateCard(c, "create");
     assert.equal(v.ok, true, `${c.id} ${v.field}: ${v.error}`);
   }
+});
+
+test("jira_keys: normalised, de-duplicated, URBN-<n> only, max 20", () => {
+  const ok = validateCard({ jira_keys: [" urbn-12", "URBN-12", "URBN-7", ""] }, "patch");
+  assert.deepEqual(ok, { ok: true, value: { jira_keys: ["URBN-12", "URBN-7"] } });
+  assert.deepEqual(validateCard({ jira_keys: [] }, "patch"), { ok: true, value: { jira_keys: [] } });
+  for (const bad of [["ABC-1"], ["URBN-"], ["URBN-1a"], "URBN-1", [1], Array.from({ length: 21 }, (_, i) => `URBN-${i}`)]) {
+    const v = validateCard({ jira_keys: bad }, "patch");
+    assert.equal(v.ok, false, JSON.stringify(bad));
+    assert.equal(v.field, "jira_keys");
+  }
+  // move rows never carry links.
+  assert.equal("jira_keys" in validateCard({ id: ID, category: "bugs", col_year: 2027, col_month: 1, col_half: 0, position: 0, jira_keys: ["URBN-1"] }, "move").value, false);
+});
+
+test("parseJiraKeys reads what an editor types", () => {
+  assert.deepEqual(parseJiraKeys("URBN-1, urbn-2  URBN-3;URBN-1"), ["URBN-1", "URBN-2", "URBN-3"]);
+  assert.deepEqual(parseJiraKeys("   "), []);
+});
+
+test("jira_keys CHECK in the migration matches the validator", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/20261117_r2_jira_keys.sql", import.meta.url), "utf8");
+  assert.match(sql, /cardinality\(jira_keys\) <= 20/);
+  assert.equal(LIMITS.jiraKeysMax, 20);
+  assert.match(sql, /\^\(URBN-\[0-9\]\+\(,URBN-\[0-9\]\+\)\*\)\?\$/);
+  assert.doesNotMatch(sql, /\b(drop|truncate|delete)\b/i);
 });

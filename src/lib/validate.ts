@@ -16,7 +16,10 @@ export const LIMITS = {
   // columns a month), so cap at 4 years of half-months.
   spanMax: 96,
   positionMax: 10000,
+  jiraKeysMax: 20,
 } as const;
+
+export const JIRA_KEY = /^URBN-[0-9]+$/;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -34,6 +37,7 @@ export type CardFields = {
   position?: number;
   status?: string;
   tray?: boolean;
+  jira_keys?: string[];
 };
 export type Validated =
   | { ok: true; value: CardFields }
@@ -58,12 +62,39 @@ const RULES: Record<keyof CardFields, Rule> = {
   value: (v) => (int(v, 0, 3) ? null : "integer 0-3"),
   position: (v) => (int(v, 0, LIMITS.positionMax) ? null : `integer 0-${LIMITS.positionMax}`),
   tray: (v) => (typeof v === "boolean" ? null : "true or false"),
+  jira_keys: (v) =>
+    !Array.isArray(v) || v.some((k) => typeof k !== "string")
+      ? "must be a list of ticket keys"
+      : v.length > LIMITS.jiraKeysMax
+        ? `max ${LIMITS.jiraKeysMax} keys`
+        : v.find((k) => !JIRA_KEY.test(k))
+          ? `"${v.find((k) => !JIRA_KEY.test(k))}" is not a URBN-<number> key`
+          : null,
 };
 
-const CONTENT = ["title", "body", "category", "col_year", "col_month", "col_half", "span", "value", "position", "status", "tray"] as const;
+// Trim, upper-case and de-duplicate ticket keys before they are checked, so
+// " urbn-12" and "URBN-12" save as one "URBN-12". Non-arrays pass through for
+// the rule to reject.
+export function normaliseJiraKeys(v: unknown): unknown {
+  if (!Array.isArray(v)) return v;
+  const out: unknown[] = [];
+  for (const k of v) {
+    const n = typeof k === "string" ? k.trim().toUpperCase() : k;
+    if (n === "") continue;
+    if (!out.includes(n)) out.push(n);
+  }
+  return out;
+}
+
+// Parse what an editor types ("URBN-1, urbn-2 URBN-3") into a key list.
+export function parseJiraKeys(text: string): string[] {
+  return normaliseJiraKeys(text.split(/[\s,;]+/)) as string[];
+}
+
+const CONTENT = ["title", "body", "category", "col_year", "col_month", "col_half", "span", "value", "position", "status", "tray", "jira_keys"] as const;
 const MOVE = ["id", "category", "col_year", "col_month", "col_half", "position", "tray"] as const;
 
-const DEFAULTS: CardFields = { title: "", body: "", span: 1, value: 0, position: 0, status: "normal", tray: false };
+const DEFAULTS: CardFields = { title: "", body: "", span: 1, value: 0, position: 0, status: "normal", tray: false, jira_keys: [] };
 
 // create: full card (defaults filled, id optional); patch: only the fields
 // present; move: one batch row (id + cell + position, all required except tray).
@@ -86,6 +117,7 @@ export function validateCard(input: unknown, mode: Mode): Validated {
         continue;
       } else return { ok: false, field: k, error: "required" };
     }
+    if (k === "jira_keys") v = normaliseJiraKeys(v);
     const err = RULES[k](v);
     if (err) return { ok: false, field: k, error: err };
     (out as Record<string, unknown>)[k] = v;
