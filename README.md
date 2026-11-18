@@ -75,6 +75,26 @@ Tests: `npm test` (node --test, no deps). Gate before merging: `npm test && npx 
 | `GEMINI_API_KEY` | Google AI Studio key for the read-only planning assistant. Unset = assistant returns 503 |
 | `GEMINI_MODEL` | Optional model override for the assistant |
 | `EXPORT_TOKEN` | Bearer token for `GET /api/export` (nightly snapshot). `openssl rand -hex 32`. Unset = export always 401 |
+| `AGENT_APPLY_TOKEN` | Bearer token for `POST /api/agent/apply` (R3 agent lane; only the ops repo's `roadmap-apply` Action holds it). `openssl rand -hex 32`, different from `EXPORT_TOKEN`. Unset = always 401 |
+
+## Agent lane (R3)
+
+Agents never call this app. They write proposal files in the ops repo
+(`proposals/roadmap/RP-*.json`); its `roadmap-apply` Action (no LLM) sends
+approved rows to `POST /api/agent/apply` with `AGENT_APPLY_TOKEN`.
+Rules in `src/lib/agent.ts` (tests `scripts/agent.test.mjs`):
+
+- Ops: `create_card` · `comment` · `edit_card` (`set` + `expect`) · `link_keys`
+  (`add`). No delete, no settings, no editing comments. ≤ 25 rows per call.
+- Tier computed here: a tentative card in the tray or a comment = notify;
+  everything else = gate and needs `approval.decided_by`.
+- Card / comment id = uuid5(row id), so a re-apply is a no-op, and a card a
+  person deleted is never revived. `edit_card` fails if any `expect` field
+  changed since it was proposed.
+- Every write is stamped `agent:<name>` (`created_by` / `updated_by`); cards
+  made this way show a small **agent** badge. Undo = delete the card as usual
+  (restorable from *Recently deleted*).
+- `dry_run: true` answers `would_apply` without writing.
 
 ## Supabase setup
 

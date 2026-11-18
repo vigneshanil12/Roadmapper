@@ -15,6 +15,7 @@ export interface Card {
   status: CardStatus;
   tray: boolean; // true = parked in the staging tray; col_* ignored
   jira_keys: string[]; // linked URBN tickets, e.g. ["URBN-2266"]; [] = none
+  created_by?: string | null; // actor stamp; "agent:<name>" = made by the R3 agent lane
 }
 
 export type NewCard = Omit<Card, "id">;

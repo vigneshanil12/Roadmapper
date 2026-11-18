@@ -13,6 +13,8 @@ export function proxy(req: NextRequest) {
     // Bearer-token export for the nightly snapshot job; the route checks the
     // token itself and fails closed when EXPORT_TOKEN is unset.
     pathname === "/api/export" ||
+    // Bearer-token agent lane (R3); the route checks AGENT_APPLY_TOKEN itself.
+    pathname === "/api/agent/apply" ||
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico"
   ) {

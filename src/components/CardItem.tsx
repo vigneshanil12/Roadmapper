@@ -252,6 +252,14 @@ export default function CardItem({
             </ul>
           )}
           {(card.jira_keys?.length ?? 0) > 0 && <JiraChips keys={card.jira_keys} />}
+          {card.created_by?.startsWith("agent:") && (
+            <span
+              title={`Added by ${card.created_by} (from the ops repo's proposal lane)`}
+              className="mt-0.5 inline-block rounded border border-black/20 px-1 text-[9px] font-semibold uppercase leading-[14px] tracking-wide opacity-60"
+            >
+              agent
+            </span>
+          )}
           {!shownTitle && bullets.length === 0 && (
             <span className="italic text-slate-500">Empty — double-click</span>
           )}

@@ -59,8 +59,9 @@ test("fails closed when secrets are unset", () => {
 
 // ---- route scan ----
 // Routes that legitimately run without a session: login/logout set and clear
-// it, health is the keepalive ping, export checks its own bearer token.
-const EXEMPT = new Set(["login", "logout", "health", "export"]);
+// it, health is the keepalive ping, export and agent/apply check their own
+// bearer tokens (EXPORT_TOKEN, AGENT_APPLY_TOKEN; agent.test.mjs checks that).
+const EXEMPT = new Set(["login", "logout", "health", "export", "agent"]);
 const API = new URL("../src/app/api/", import.meta.url).pathname;
 
 function routeFiles(dir) {
